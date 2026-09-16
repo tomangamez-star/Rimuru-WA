@@ -1,22 +1,44 @@
-PHASE 1 FIXED PACKAGE
+RIMURU-WA PHASE 2 — Games + Leaderboard + Menu
 
-Upload/replace all four files under src/ exactly as included:
-- src/server.js (REPLACE)
-- src/auth-store.js (REPLACE)
-- src/economy-store.js (NEW/REPLACE)
-- src/economy-router.js (NEW/REPLACE)
+Upload/replace ALL files in src/.
 
-No manual patching is required.
+New:
+- casino.js
+- ui.js
 
-All four files pass `node --check`.
+Modified:
+- server.js
+- economy-store.js
+- economy-router.js
+- auth-store.js (same working Phase 1 DB export)
 
-After Render redeploys, logs should contain:
-  Phase 1 economy schema ready
+Adds:
+- persistent registration-aware /start
+- native-button /menu
+- Casino, Balance, Leaderboard, Games, Utilities, Help buttons
+- /help 1, /help 2, /help 3
+- /lb and /leaderboard
+- /casino and /games
+- /slots
+- /cf /coinflip
+- /dice
+- /roulette (red/black/even/odd/low/high/straight)
+- persistent games played/won/lost/wagered/casino profit stats
 
-Then test:
-  /balance
-  /dep 100000
-  /wd 50000
-  /bank
+Casino multipliers/rules ported from the original Tempest Rimuru source:
+Slots 2-match 2x / 3-match 4x; coinflip 2x; dice exact-number 6x;
+European roulette even-money 2x and straight 36x.
 
-The existing WhatsApp session table is untouched.
+This phase intentionally leaves Blackjack/Mines and their stateful native gameplay
+for the next game batch rather than replacing the already-proven /mines transport test.
+
+After deploy:
+1. /start twice (first welcome, second welcome-back)
+2. /menu and press every button
+3. /help 1
+4. /lb
+5. /slots 1000
+6. /cf heads 1000
+7. /dice 3 1000
+8. /roulette red 1000
+9. redeploy and verify balance + registration + leaderboard persist.
