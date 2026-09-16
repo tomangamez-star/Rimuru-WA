@@ -1,0 +1,17 @@
+{
+  "name": "rimuru-wa-server-test",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "src/server.js",
+  "engines": { "node": ">=20.0.0" },
+  "scripts": {
+    "start": "node src/server.js",
+    "check": "node --check src/server.js && node --check src/auth-store.js && node --check src/telegram-control.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "pg": "8.16.3",
+    "pino": "9.4.0"
+  }
+}

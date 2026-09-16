@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: rimuru-wa-speed-test
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22.18.0
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_OWNER_ID
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: WA_SESSION_ID
+        value: rimuru-wa-test
