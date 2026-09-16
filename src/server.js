@@ -193,6 +193,13 @@ class WhatsAppConnection {
     const content = message.message || {}
     const playerId = message.key.participant || jid
     const gameKey = `${jid}:${playerId}`
+    const selectedRowId = content.listResponseMessage?.singleSelectReply?.selectedRowId
+    if (selectedRowId === 'ryuden_enter') {
+      await sock.sendMessage(jid, {
+        text: '🌊 Welcome to *RYUDEN*!\n\nList selection received successfully ✅\nYou have entered the JTF × Ryuden realm.'
+      }, { quoted: message })
+      return
+    }
     const interactiveJson = content.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson
     if (interactiveJson) {
       let response
@@ -204,7 +211,7 @@ class WhatsAppConnection {
       }
     }
     const text = String(content.conversation || content.extendedTextMessage?.text || '').trim().toLowerCase()
-    if (!['/ping', '/test', '/dbping', '/image', '/api', '/menu', '/mines'].includes(text)) return
+    if (!['/ping', '/test', '/dbping', '/image', '/api', '/menu', '/mines', '/start'].includes(text)) return
 
     const receivedAt = Date.now()
     const timestamp = Number(message.messageTimestamp?.toString?.() || message.messageTimestamp)
@@ -302,7 +309,39 @@ class WhatsAppConnection {
         startedAt: Date.now()
       })
       await this.sendMinesButtons(sock, jid)
+      return
     }
+
+    if (text === '/start') {
+      await this.sendStartList(sock, jid)
+    }
+  }
+
+  async sendStartList (sock, jid) {
+    const { proto, generateWAMessageFromContent } = this.baileys
+    const generated = generateWAMessageFromContent(jid, {
+      listMessage: proto.Message.ListMessage.create({
+        title: '🌊 JTF × RYUDEN',
+        description: 'Rimuru is waiting at the gates of Ryuden. Open the entry list below and choose Enter Ryuden to continue.',
+        buttonText: 'ENTER',
+        footerText: 'JTF Casino • Ryuden RPG',
+        listType: proto.Message.ListMessage.ListType.SINGLE_SELECT,
+        sections: [
+          proto.Message.ListMessage.Section.create({
+            title: 'RYUDEN GATE',
+            rows: [
+              proto.Message.ListMessage.Row.create({
+                title: '🌊 Enter Ryuden',
+                description: 'Begin your journey with Rimuru',
+                rowId: 'ryuden_enter'
+              })
+            ]
+          })
+        ]
+      })
+    }, {})
+    await sock.relayMessage(jid, generated.message, { messageId: generated.key.id })
+    logger.info({ jid, messageId: generated.key.id }, 'start list test sent')
   }
 
   async sendMinesButtons (sock, jid) {
