@@ -9,6 +9,8 @@ const { createTelegramControl } = require('./telegram-control')
 const { buildEnterMessage, relayOptions, createTracker } = require('./button-test')
 const { createEconomyStore } = require('./economy-store')
 const { createEconomyRouter } = require('./economy-router')
+const { createCasino } = require('./casino')
+const { createUi } = require('./ui')
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
 const port = Number(process.env.PORT || 3000)
@@ -17,6 +19,8 @@ const MENU_IMAGE_PATH = path.join(__dirname, '..', 'assets', 'ryuden-menu.jpg')
 const API_IMAGE_URL = process.env.TEST_IMAGE_URL || 'https://picsum.photos/900/1200.jpg'
 const economy = createEconomyStore({ database, logger })
 const routeEconomy = createEconomyRouter({ economy, logger })
+const casino = createCasino({ economy })
+let ui = null
 const MENU_CAPTION = [
   '╭━━━〔 🌊 *WELCOME TO RYUDEN* 🌊 〕━━━╮','','Hey there! I’m *Rimuru* — guardian of the JTF Casino and your cheerful guide through Ryuden. 💙','',
   'Here, luck meets strategy and friendships are forged. Whether you came to test your fortune, explore the realm, or relax with the crew, there’s a place for you. ✨','',
@@ -54,12 +58,14 @@ class WhatsAppConnection {
     const jid=message?.key?.remoteJid,id=message?.key?.id;if(!jid||!id||message.key.fromMe||jid==='status@broadcast'||this.seen.has(id))return
     this.seen.set(id,Date.now());if(this.seen.size>2000)this.seen.clear()
     const content=this.baileys.normalizeMessageContent(message.message)||{}
+    if(!ui)ui=createUi({economy,casino,logger,sendButtons:(s,j,b,f,d)=>this.sendNativeButtons(s,j,b,f,d)})
+    if(await ui.route(sock,message,content))return
     if(await routeEconomy(sock,message,content))return
     const playerId=message.key.participant||jid,gameKey=`${jid}:${playerId}`
     const selectedRowId=content.listResponseMessage?.singleSelectReply?.selectedRowId
     if(selectedRowId==='ryuden_enter'){await sock.sendMessage(jid,{text:'🌊 Welcome to *RYUDEN*!\n\nList selection received successfully ✅\nYou have entered the JTF × Ryuden realm.'},{quoted:message});return}
     const interactiveJson=content.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson
-    if(interactiveJson){let response;try{response=JSON.parse(interactiveJson)}catch{response={}}const selectedId=response.id||response.button_id||response.selected_id;if(selectedId==='ryuden_enter'){logger.info({jid,messageId:id},'button test: Enter callback received');await sock.sendMessage(jid,{text:'🌊 Welcome to RYUDEN!\n\nEnter button received ✅\nJTF × Ryuden'},{quoted:message});return}if(selectedId?.startsWith('mines_')){await this.handleMinesButton(sock,message,gameKey,selectedId);return}}
+    if(interactiveJson){let response;try{response=JSON.parse(interactiveJson)}catch{response={}}const selectedId=response.id||response.button_id||response.selected_id;if(selectedId?.startsWith('menu_')||selectedId?.startsWith('casino_')){if(!ui)ui=createUi({economy,casino,logger,sendButtons:(s,j,b,f,d)=>this.sendNativeButtons(s,j,b,f,d)});await ui.section(sock,message,selectedId);return}if(selectedId==='ryuden_enter'){logger.info({jid,messageId:id},'button test: Enter callback received');await sock.sendMessage(jid,{text:'🌊 Welcome to RYUDEN!\n\nEnter button received ✅\nJTF × Ryuden'},{quoted:message});return}if(selectedId?.startsWith('mines_')){await this.handleMinesButton(sock,message,gameKey,selectedId);return}}
     const text=String(content.conversation||content.extendedTextMessage?.text||'').trim().toLowerCase()
     if(!['/ping','/test','/dbping','/image','/api','/menu','/mines','/start'].includes(text))return
     const receivedAt=Date.now(),timestamp=Number(message.messageTimestamp?.toString?.()||message.messageTimestamp),deliveryMs=Number.isFinite(timestamp)?Math.max(0,receivedAt-timestamp*1000):null
@@ -70,6 +76,12 @@ class WhatsAppConnection {
     if(text==='/menu'){const image=await fs.readFile(MENU_IMAGE_PATH);await sock.sendMessage(jid,{image,caption:MENU_CAPTION},{quoted:message});return}
     if(text==='/mines'){this.minesGames.set(gameKey,{mine:Math.random()<0.5?'mines_a1':'mines_b2',opened:new Set(),startedAt:Date.now()});await this.sendMinesButtons(sock,jid);return}
     if(text==='/start')await this.sendStartButton(sock,jid)
+  }
+  async sendNativeButtons(sock,jid,body,footer,defs){
+    const {proto,generateWAMessageFromContent}=this.baileys
+    const buttons=defs.map(([label,id])=>({name:'quick_reply',buttonParamsJson:JSON.stringify({display_text:label,id})}))
+    const generated=generateWAMessageFromContent(jid,{viewOnceMessage:{message:{messageContextInfo:{deviceListMetadata:{},deviceListMetadataVersion:2},interactiveMessage:proto.Message.InteractiveMessage.create({body:proto.Message.InteractiveMessage.Body.create({text:body}),footer:proto.Message.InteractiveMessage.Footer.create({text:footer}),nativeFlowMessage:proto.Message.InteractiveMessage.NativeFlowMessage.create({buttons})})}}},{})
+    await sock.relayMessage(jid,generated.message,relayOptions(generated.key.id))
   }
   async sendStartButton(sock,jid){const {generateWAMessageFromContent}=this.baileys;const generated=generateWAMessageFromContent(jid,buildEnterMessage(),{userJid:sock.user.id});const tracker=this.buttonTracker;tracker.track(generated.key.id,jid);try{await sock.relayMessage(jid,generated.message,relayOptions(generated.key.id))}catch(error){tracker.failed(generated.key.id,error);throw error}}
   async sendMinesButtons(sock,jid){const {proto,generateWAMessageFromContent}=this.baileys;const buttons=[{name:'quick_reply',buttonParamsJson:JSON.stringify({display_text:'💎 Open A1',id:'mines_a1'})},{name:'quick_reply',buttonParamsJson:JSON.stringify({display_text:'💎 Open B2',id:'mines_b2'})},{name:'quick_reply',buttonParamsJson:JSON.stringify({display_text:'💰 Cash Out',id:'mines_cashout'})}];const generated=generateWAMessageFromContent(jid,{viewOnceMessage:{message:{messageContextInfo:{deviceListMetadata:{},deviceListMetadataVersion:2},interactiveMessage:proto.Message.InteractiveMessage.create({body:proto.Message.InteractiveMessage.Body.create({text:'╭━━〔 💣 MINES BUTTON TEST 〕━━╮\n│ Tap a button below.\n╰━━━━━━━━━━━━━━━━━━╯'}),footer:proto.Message.InteractiveMessage.Footer.create({text:'JTF × RYUDEN • interactive test'}),nativeFlowMessage:proto.Message.InteractiveMessage.NativeFlowMessage.create({buttons})})}}},{});await sock.relayMessage(jid,generated.message,{messageId:generated.key.id})}

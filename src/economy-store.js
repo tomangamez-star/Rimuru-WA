@@ -1,176 +1,19 @@
 'use strict'
-
 const START_BALANCE = Number(process.env.START_BALANCE || 500000)
-
-function fmt (n) {
-  return Number(n || 0).toLocaleString('en-US')
+function fmt(n){return Number(n||0).toLocaleString('en-US')}
+function parseAmount(raw,max){if(raw==null)return null;const v=String(raw).trim().toLowerCase();if(['all','max',''].includes(v))return max;if(v==='half')return Math.floor(max/2);const n=Number(v.replace(/,/g,''));return Number.isFinite(n)&&n>0?Math.floor(n):null}
+function createEconomyStore({database}){
+ let ready=false
+ async function ensureSchema(){if(ready)return;const db=database();if(!db)throw new Error('DATABASE_URL is required for the Rimuru economy');await db.query(`CREATE TABLE IF NOT EXISTS rimuru_wa_users(user_id TEXT PRIMARY KEY,display_name TEXT NOT NULL DEFAULT '',wallet BIGINT NOT NULL DEFAULT ${START_BALANCE},bank BIGINT NOT NULL DEFAULT 0,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),CHECK(wallet>=0),CHECK(bank>=0)); ALTER TABLE rimuru_wa_users ADD COLUMN IF NOT EXISTS registered_at TIMESTAMPTZ; ALTER TABLE rimuru_wa_users ADD COLUMN IF NOT EXISTS games_played BIGINT NOT NULL DEFAULT 0; ALTER TABLE rimuru_wa_users ADD COLUMN IF NOT EXISTS games_won BIGINT NOT NULL DEFAULT 0; ALTER TABLE rimuru_wa_users ADD COLUMN IF NOT EXISTS games_lost BIGINT NOT NULL DEFAULT 0; ALTER TABLE rimuru_wa_users ADD COLUMN IF NOT EXISTS wagered BIGINT NOT NULL DEFAULT 0; ALTER TABLE rimuru_wa_users ADD COLUMN IF NOT EXISTS casino_profit BIGINT NOT NULL DEFAULT 0;`);ready=true}
+ const norm=r=>r&&({userId:r.user_id,displayName:r.display_name||'',wallet:Number(r.wallet||0),bank:Number(r.bank||0),registeredAt:r.registered_at,gamesPlayed:Number(r.games_played||0),gamesWon:Number(r.games_won||0),gamesLost:Number(r.games_lost||0),wagered:Number(r.wagered||0),casinoProfit:Number(r.casino_profit||0)})
+ async function findUser(id){await ensureSchema();return norm((await database().query('SELECT * FROM rimuru_wa_users WHERE user_id=$1',[id])).rows[0])}
+ async function ensureUser(id,name=''){await ensureSchema();return norm((await database().query(`INSERT INTO rimuru_wa_users(user_id,display_name,wallet,bank,last_seen) VALUES($1,$2,$3,0,NOW()) ON CONFLICT(user_id) DO UPDATE SET display_name=CASE WHEN EXCLUDED.display_name<>'' THEN EXCLUDED.display_name ELSE rimuru_wa_users.display_name END,last_seen=NOW(),updated_at=NOW() RETURNING *`,[id,name,START_BALANCE])).rows[0])}
+ async function register(id,name=''){const before=await findUser(id);const was=!!before?.registeredAt;await ensureUser(id,name);const u=norm((await database().query('UPDATE rimuru_wa_users SET registered_at=COALESCE(registered_at,NOW()),updated_at=NOW() WHERE user_id=$1 RETURNING *',[id])).rows[0]);return {isNew:!was,user:u}}
+ async function move(id,raw,dir,name=''){await ensureUser(id,name);const db=database(),c=await db.connect();try{await c.query('BEGIN');const u=norm((await c.query('SELECT * FROM rimuru_wa_users WHERE user_id=$1 FOR UPDATE',[id])).rows[0]);const max=dir==='deposit'?u.wallet:u.bank,amt=parseAmount(raw,max);if(!amt||amt>max){await c.query('ROLLBACK');return{ok:false,message:`❌ You only have ${fmt(max)} in your ${dir==='deposit'?'wallet':'bank'}.`}}const q=dir==='deposit'?'UPDATE rimuru_wa_users SET wallet=wallet-$2,bank=bank+$2,updated_at=NOW() WHERE user_id=$1 RETURNING *':'UPDATE rimuru_wa_users SET bank=bank-$2,wallet=wallet+$2,updated_at=NOW() WHERE user_id=$1 RETURNING *';const x=norm((await c.query(q,[id,amt])).rows[0]);await c.query('COMMIT');return{ok:true,amount:amt,user:x}}catch(e){await c.query('ROLLBACK').catch(()=>{});throw e}finally{c.release()}}
+ async function transfer({fromId,toId,rawAmount,source,fromName='',toName=''}){if(!toId)return{ok:false,message:'Reply to someone to choose the recipient.'};if(fromId===toId)return{ok:false,message:'🤨 You cannot send coins to yourself.'};await ensureUser(fromId,fromName);await ensureUser(toId,toName);const c=await database().connect();try{await c.query('BEGIN');const ids=[fromId,toId].sort();await c.query('SELECT user_id FROM rimuru_wa_users WHERE user_id=ANY($1::text[]) ORDER BY user_id FOR UPDATE',[ids]);const from=norm((await c.query('SELECT * FROM rimuru_wa_users WHERE user_id=$1',[fromId])).rows[0]),max=source==='bank'?from.bank:from.wallet,amt=parseAmount(rawAmount,max);if(!amt||amt>max){await c.query('ROLLBACK');return{ok:false,message:`❌ You only have ${fmt(max)} in your ${source}.`}}const col=source==='bank'?'bank':'wallet';await c.query(`UPDATE rimuru_wa_users SET ${col}=${col}-$2,updated_at=NOW() WHERE user_id=$1`,[fromId,amt]);await c.query(`UPDATE rimuru_wa_users SET ${col}=${col}+$2,updated_at=NOW() WHERE user_id=$1`,[toId,amt]);await c.query('COMMIT');return{ok:true,amount:amt}}catch(e){await c.query('ROLLBACK').catch(()=>{});throw e}finally{c.release()}}
+ async function playBet(id,bet,game,resolver,name=''){bet=Math.floor(Number(bet));if(!Number.isFinite(bet)||bet<=0)return{ok:false,message:`🎩 Invalid bet.`};await ensureUser(id,name);const c=await database().connect();try{await c.query('BEGIN');const u=norm((await c.query('SELECT * FROM rimuru_wa_users WHERE user_id=$1 FOR UPDATE',[id])).rows[0]);if(u.wallet<bet){await c.query('ROLLBACK');return{ok:false,message:`❌ Not enough wallet. You have ${fmt(u.wallet)}.`}}const outcome=resolver();const payout=Math.max(0,Math.floor(Number(outcome.payout||0))),net=payout-bet,won=payout>bet,lost=payout===0;const x=norm((await c.query(`UPDATE rimuru_wa_users SET wallet=wallet-$2+$3,games_played=games_played+1,games_won=games_won+$4,games_lost=games_lost+$5,wagered=wagered+$2,casino_profit=casino_profit+$6,updated_at=NOW(),last_seen=NOW() WHERE user_id=$1 RETURNING *`,[id,bet,payout,won?1:0,lost?1:0,net])).rows[0]);await c.query('COMMIT');return{ok:true,...outcome,bet,payout,net,user:x,game}}catch(e){await c.query('ROLLBACK').catch(()=>{});throw e}finally{c.release()}}
+ async function leaderboard(limit=10){await ensureSchema();return (await database().query('SELECT *,wallet+bank AS net_worth FROM rimuru_wa_users WHERE registered_at IS NOT NULL ORDER BY wallet+bank DESC,updated_at ASC LIMIT $1',[limit])).rows.map((r,i)=>({...norm(r),rank:i+1,netWorth:Number(r.net_worth)}))}
+ async function stats(){await ensureSchema();const r=(await database().query('SELECT COUNT(*)::int players,COALESCE(SUM(wallet),0)::text wallet,COALESCE(SUM(bank),0)::text bank FROM rimuru_wa_users')).rows[0];return{players:Number(r.players),wallet:Number(r.wallet),bank:Number(r.bank)}}
+ return{ensureSchema,findUser,ensureUser,register,getBalance:ensureUser,deposit:(i,a,n)=>move(i,a,'deposit',n),withdraw:(i,a,n)=>move(i,a,'withdraw',n),donate:a=>transfer({...a,source:'wallet'}),transfer:a=>transfer({...a,source:'bank'}),playBet,leaderboard,stats,fmt}
 }
-
-function parseAmount (raw, max) {
-  if (raw == null) return null
-  const value = String(raw).trim().toLowerCase()
-  if (value === 'all' || value === 'max' || value === '') return max
-  if (value === 'half') return Math.floor(max / 2)
-  const amount = Number(value.replace(/,/g, ''))
-  if (!Number.isFinite(amount) || amount <= 0) return null
-  return Math.floor(amount)
-}
-
-function createEconomyStore ({ database, logger }) {
-  let ready = false
-
-  async function ensureSchema () {
-    if (ready) return
-    const db = database()
-    if (!db) throw new Error('DATABASE_URL is required for the Rimuru economy')
-    await db.query(`
-      CREATE TABLE IF NOT EXISTS rimuru_wa_users (
-        user_id TEXT PRIMARY KEY,
-        display_name TEXT NOT NULL DEFAULT '',
-        wallet BIGINT NOT NULL DEFAULT ${START_BALANCE},
-        bank BIGINT NOT NULL DEFAULT 0,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        CHECK (wallet >= 0),
-        CHECK (bank >= 0)
-      )
-    `)
-    ready = true
-  }
-
-  function normalizeRow (row) {
-    if (!row) return null
-    return {
-      userId: row.user_id,
-      displayName: row.display_name || '',
-      wallet: Number(row.wallet || 0),
-      bank: Number(row.bank || 0)
-    }
-  }
-
-  async function ensureUser (userId, displayName = '') {
-    await ensureSchema()
-    const db = database()
-    const result = await db.query(`
-      INSERT INTO rimuru_wa_users(user_id, display_name, wallet, bank, last_seen)
-      VALUES($1,$2,$3,0,NOW())
-      ON CONFLICT(user_id) DO UPDATE SET
-        display_name = CASE WHEN EXCLUDED.display_name <> '' THEN EXCLUDED.display_name ELSE rimuru_wa_users.display_name END,
-        last_seen = NOW(),
-        updated_at = NOW()
-      RETURNING *
-    `, [userId, displayName, START_BALANCE])
-    return normalizeRow(result.rows[0])
-  }
-
-  async function getBalance (userId, displayName = '') {
-    return ensureUser(userId, displayName)
-  }
-
-  async function moveMoney (userId, rawAmount, direction, displayName = '') {
-    await ensureSchema()
-    const db = database()
-    const client = await db.connect()
-    try {
-      await client.query('BEGIN')
-      await client.query(`
-        INSERT INTO rimuru_wa_users(user_id, display_name, wallet, bank)
-        VALUES($1,$2,$3,0)
-        ON CONFLICT(user_id) DO NOTHING
-      `, [userId, displayName, START_BALANCE])
-      const locked = await client.query('SELECT * FROM rimuru_wa_users WHERE user_id=$1 FOR UPDATE', [userId])
-      const user = normalizeRow(locked.rows[0])
-      const max = direction === 'deposit' ? user.wallet : user.bank
-      const amount = parseAmount(rawAmount, max)
-      if (amount == null) {
-        await client.query('ROLLBACK')
-        return { ok: false, message: `Usage: ${direction === 'deposit' ? '/dep' : '/wd'} [amount|half|all]` }
-      }
-      if (amount <= 0 || amount > max) {
-        await client.query('ROLLBACK')
-        return { ok: false, message: `❌ You only have ${fmt(max)} in your ${direction === 'deposit' ? 'wallet' : 'bank'}.` }
-      }
-      const sql = direction === 'deposit'
-        ? `UPDATE rimuru_wa_users SET wallet=wallet-$2, bank=bank+$2, updated_at=NOW(), last_seen=NOW() WHERE user_id=$1 RETURNING *`
-        : `UPDATE rimuru_wa_users SET bank=bank-$2, wallet=wallet+$2, updated_at=NOW(), last_seen=NOW() WHERE user_id=$1 RETURNING *`
-      const updated = normalizeRow((await client.query(sql, [userId, amount])).rows[0])
-      await client.query('COMMIT')
-      return { ok: true, amount, user: updated }
-    } catch (error) {
-      await client.query('ROLLBACK').catch(() => {})
-      throw error
-    } finally {
-      client.release()
-    }
-  }
-
-  async function transfer ({ fromId, toId, rawAmount, source, fromName = '', toName = '' }) {
-    if (!toId) return { ok: false, message: 'Reply to someone to choose the recipient.' }
-    if (fromId === toId) return { ok: false, message: '🤨 You cannot send coins to yourself.' }
-    await ensureSchema()
-    const db = database()
-    const client = await db.connect()
-    try {
-      await client.query('BEGIN')
-      for (const [id, name] of [[fromId, fromName], [toId, toName]]) {
-        await client.query(`
-          INSERT INTO rimuru_wa_users(user_id, display_name, wallet, bank)
-          VALUES($1,$2,$3,0) ON CONFLICT(user_id) DO NOTHING
-        `, [id, name, START_BALANCE])
-      }
-      const ids = [fromId, toId].sort()
-      await client.query('SELECT user_id FROM rimuru_wa_users WHERE user_id=ANY($1::text[]) ORDER BY user_id FOR UPDATE', [ids])
-      const from = normalizeRow((await client.query('SELECT * FROM rimuru_wa_users WHERE user_id=$1', [fromId])).rows[0])
-      const max = source === 'bank' ? from.bank : from.wallet
-      const amount = parseAmount(rawAmount, max)
-      if (amount == null) {
-        await client.query('ROLLBACK')
-        return { ok: false, message: `Usage: ${source === 'bank' ? '/transfer' : '/donate'} [amount|half|all] as a reply.` }
-      }
-      if (amount <= 0 || amount > max) {
-        await client.query('ROLLBACK')
-        return { ok: false, message: `❌ You only have ${fmt(max)} in your ${source}.` }
-      }
-      const column = source === 'bank' ? 'bank' : 'wallet'
-      await client.query(`UPDATE rimuru_wa_users SET ${column}=${column}-$2, updated_at=NOW() WHERE user_id=$1`, [fromId, amount])
-      await client.query(`UPDATE rimuru_wa_users SET ${column}=${column}+$2, updated_at=NOW() WHERE user_id=$1`, [toId, amount])
-      await client.query('COMMIT')
-      return { ok: true, amount }
-    } catch (error) {
-      await client.query('ROLLBACK').catch(() => {})
-      throw error
-    } finally {
-      client.release()
-    }
-  }
-
-  async function stats () {
-    await ensureSchema()
-    const result = await database().query(`
-      SELECT COUNT(*)::int AS players,
-             COALESCE(SUM(wallet),0)::text AS wallet,
-             COALESCE(SUM(bank),0)::text AS bank
-      FROM rimuru_wa_users
-    `)
-    return {
-      players: Number(result.rows[0].players),
-      wallet: Number(result.rows[0].wallet),
-      bank: Number(result.rows[0].bank)
-    }
-  }
-
-  return {
-    ensureSchema,
-    ensureUser,
-    getBalance,
-    deposit: (id, amount, name) => moveMoney(id, amount, 'deposit', name),
-    withdraw: (id, amount, name) => moveMoney(id, amount, 'withdraw', name),
-    donate: (args) => transfer({ ...args, source: 'wallet' }),
-    transfer: (args) => transfer({ ...args, source: 'bank' }),
-    stats,
-    fmt
-  }
-}
-
-module.exports = { createEconomyStore, fmt, parseAmount }
+module.exports={createEconomyStore,fmt,parseAmount}

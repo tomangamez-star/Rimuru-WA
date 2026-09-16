@@ -113,4 +113,4 @@ function createEconomyRouter ({ economy, logger }) {
   }
 }
 
-module.exports = { createEconomyRouter, canonicalUserId, quotedUserId, commandParts }
+module.exports = { createEconomyRouter, canonicalUserId, quotedUserId, commandParts, displayName }
