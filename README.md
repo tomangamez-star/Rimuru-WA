@@ -15,6 +15,9 @@ Private Telegram control bot (owner only):
 WhatsApp:
 
 - `/ping` or `/test` — immediate reply with processing and delivery latency.
+- `/dbping` — performs a real Supabase query and reports query time.
+- `/image` — reads and uploads a bundled image, then reports disk/upload time.
+- `/api` — downloads and uploads an external image, then reports each stage.
 
 ## Required environment variables
 
