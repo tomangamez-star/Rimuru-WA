@@ -56,6 +56,7 @@ class WhatsAppConnection {
     this.pairingInFlight = false
     this.stopping = false
     this.seen = new Map()
+    this.minesGames = new Map()
   }
 
   status () {
@@ -190,8 +191,20 @@ class WhatsAppConnection {
     this.seen.set(id, Date.now())
     if (this.seen.size > 2000) this.seen.clear()
     const content = message.message || {}
+    const playerId = message.key.participant || jid
+    const gameKey = `${jid}:${playerId}`
+    const interactiveJson = content.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson
+    if (interactiveJson) {
+      let response
+      try { response = JSON.parse(interactiveJson) } catch { response = {} }
+      const selectedId = response.id || response.button_id || response.selected_id
+      if (selectedId?.startsWith('mines_')) {
+        await this.handleMinesButton(sock, message, gameKey, selectedId)
+        return
+      }
+    }
     const text = String(content.conversation || content.extendedTextMessage?.text || '').trim().toLowerCase()
-    if (!['/ping', '/test', '/dbping', '/image', '/api', '/menu'].includes(text)) return
+    if (!['/ping', '/test', '/dbping', '/image', '/api', '/menu', '/mines'].includes(text)) return
 
     const receivedAt = Date.now()
     const timestamp = Number(message.messageTimestamp?.toString?.() || message.messageTimestamp)
@@ -279,7 +292,78 @@ class WhatsAppConnection {
         uploadMs: Date.now() - uploadStarted,
         totalMs: Date.now() - receivedAt
       }, 'menu replied')
+      return
     }
+
+    if (text === '/mines') {
+      this.minesGames.set(gameKey, {
+        mine: Math.random() < 0.5 ? 'mines_a1' : 'mines_b2',
+        opened: new Set(),
+        startedAt: Date.now()
+      })
+      await this.sendMinesButtons(sock, jid)
+    }
+  }
+
+  async sendMinesButtons (sock, jid) {
+    const { proto, generateWAMessageFromContent } = this.baileys
+    const buttons = [
+      { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: '💎 Open A1', id: 'mines_a1' }) },
+      { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: '💎 Open B2', id: 'mines_b2' }) },
+      { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: '💰 Cash Out', id: 'mines_cashout' }) }
+    ]
+    const generated = generateWAMessageFromContent(jid, {
+      viewOnceMessage: {
+        message: {
+          messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
+          interactiveMessage: proto.Message.InteractiveMessage.create({
+            body: proto.Message.InteractiveMessage.Body.create({
+              text: [
+                '╭━━〔 💣 MINES BUTTON TEST 〕━━╮',
+                '│ Stake: 1,000 test coins',
+                '│ Multiplier: 1.00×',
+                '│',
+                '│     A    B',
+                '│ 1  ⬛  ⬛',
+                '│ 2  ⬛  ⬛',
+                '│',
+                '│ Tap a button below—do not type.',
+                '╰━━━━━━━━━━━━━━━━━━╯'
+              ].join('\n')
+            }),
+            footer: proto.Message.InteractiveMessage.Footer.create({ text: 'JTF × RYUDEN • interactive test' }),
+            nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({ buttons })
+          })
+        }
+      }
+    }, {})
+    await sock.relayMessage(jid, generated.message, { messageId: generated.key.id })
+    logger.info({ jid, messageId: generated.key.id }, 'mines interactive test sent')
+  }
+
+  async handleMinesButton (sock, message, gameKey, selectedId) {
+    const jid = message.key.remoteJid
+    const game = this.minesGames.get(gameKey)
+    if (!game) {
+      await sock.sendMessage(jid, { text: 'That Mines session expired. Send /mines again.' }, { quoted: message })
+      return
+    }
+    if (selectedId === 'mines_cashout') {
+      this.minesGames.delete(gameKey)
+      await sock.sendMessage(jid, { text: '💰 Cashed out successfully!\nButton callback received ✅' }, { quoted: message })
+      return
+    }
+    if (game.opened.has(selectedId)) {
+      await sock.sendMessage(jid, { text: 'That tile was already opened—and the button callback still worked ✅' }, { quoted: message })
+      return
+    }
+    game.opened.add(selectedId)
+    if (selectedId === game.mine) {
+      this.minesGames.delete(gameKey)
+      await sock.sendMessage(jid, { text: '💥 BOOM! You found the mine.\nButton callback received ✅' }, { quoted: message })
+      return
+    }
+    await sock.sendMessage(jid, { text: '💎 SAFE TILE! Multiplier: 1.50×\nButton callback received ✅' }, { quoted: message })
   }
 
   async stop () {
