@@ -6,6 +6,7 @@ const path = require('path')
 const pino = require('pino')
 const { createAuthState, clearAuthState, closeAuthStore, pingDatabase } = require('./auth-store')
 const { createTelegramControl } = require('./telegram-control')
+const { buildEnterMessage, relayOptions, createTracker } = require('./button-test')
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
 const port = Number(process.env.PORT || 3000)
@@ -96,6 +97,8 @@ class WhatsAppConnection {
       logger: logger.child({ module: 'baileys' })
     })
     this.sock = sock
+    this.buttonTracker?.dispose()
+    this.buttonTracker = createTracker(sock, logger)
     sock.ev.on('creds.update', async () => {
       await saveCreds()
       this.registered = Boolean(state.creds.registered)
@@ -128,6 +131,7 @@ class WhatsAppConnection {
 
   async onClose (sock, currentGeneration, lastDisconnect) {
     if (this.generation !== currentGeneration || this.sock !== sock) return
+    this.buttonTracker?.dispose()
     const code = lastDisconnect?.error?.output?.statusCode
     this.sock = null
     this.pairingReady = false
@@ -171,6 +175,7 @@ class WhatsAppConnection {
   }
 
   async resetSocket (clearSession) {
+    this.buttonTracker?.dispose()
     this.generation += 1
     const old = this.sock
     this.sock = null
@@ -190,7 +195,7 @@ class WhatsAppConnection {
     if (!jid || !id || message.key.fromMe || jid === 'status@broadcast' || this.seen.has(id)) return
     this.seen.set(id, Date.now())
     if (this.seen.size > 2000) this.seen.clear()
-    const content = message.message || {}
+    const content = this.baileys.normalizeMessageContent(message.message) || {}
     const playerId = message.key.participant || jid
     const gameKey = `${jid}:${playerId}`
     const selectedRowId = content.listResponseMessage?.singleSelectReply?.selectedRowId
@@ -205,6 +210,11 @@ class WhatsAppConnection {
       let response
       try { response = JSON.parse(interactiveJson) } catch { response = {} }
       const selectedId = response.id || response.button_id || response.selected_id
+      if (selectedId === 'ryuden_enter') {
+        logger.info({ jid, messageId: id }, 'button test: Enter callback received')
+        await sock.sendMessage(jid, { text: '🌊 Welcome to RYUDEN!\n\nEnter button received ✅\nJTF × Ryuden' }, { quoted: message })
+        return
+      }
       if (selectedId?.startsWith('mines_')) {
         await this.handleMinesButton(sock, message, gameKey, selectedId)
         return
@@ -313,35 +323,21 @@ class WhatsAppConnection {
     }
 
     if (text === '/start') {
-      await this.sendStartList(sock, jid)
+      await this.sendStartButton(sock, jid)
     }
   }
 
-  async sendStartList (sock, jid) {
-    const { proto, generateWAMessageFromContent } = this.baileys
-    const generated = generateWAMessageFromContent(jid, {
-      listMessage: proto.Message.ListMessage.create({
-        title: '🌊 JTF × RYUDEN',
-        description: 'Rimuru is waiting at the gates of Ryuden. Open the entry list below and choose Enter Ryuden to continue.',
-        buttonText: 'ENTER',
-        footerText: 'JTF Casino • Ryuden RPG',
-        listType: proto.Message.ListMessage.ListType.SINGLE_SELECT,
-        sections: [
-          proto.Message.ListMessage.Section.create({
-            title: 'RYUDEN GATE',
-            rows: [
-              proto.Message.ListMessage.Row.create({
-                title: '🌊 Enter Ryuden',
-                description: 'Begin your journey with Rimuru',
-                rowId: 'ryuden_enter'
-              })
-            ]
-          })
-        ]
-      })
-    }, {})
-    await sock.relayMessage(jid, generated.message, { messageId: generated.key.id })
-    logger.info({ jid, messageId: generated.key.id }, 'start list test sent')
+  async sendStartButton (sock, jid) {
+    const { generateWAMessageFromContent } = this.baileys
+    const generated = generateWAMessageFromContent(jid, buildEnterMessage(), { userJid: sock.user.id })
+    const tracker = this.buttonTracker
+    tracker.track(generated.key.id, jid)
+    try {
+      await sock.relayMessage(jid, generated.message, relayOptions(generated.key.id))
+    } catch (error) {
+      tracker.failed(generated.key.id, error)
+      throw error
+    }
   }
 
   async sendMinesButtons (sock, jid) {
@@ -406,6 +402,7 @@ class WhatsAppConnection {
   }
 
   async stop () {
+    this.buttonTracker?.dispose()
     this.stopping = true
     this.generation += 1
     try { this.sock?.end(undefined) } catch {}
