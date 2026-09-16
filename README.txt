@@ -1,44 +1,26 @@
-RIMURU-WA PHASE 2 — Games + Leaderboard + Menu
+REUPLOAD — BUTTON TAP + SPAM PATCH
 
-Upload/replace ALL files in src/.
+IMPORTANT: last time the modified server.js was NOT committed.
 
-New:
-- casino.js
-- ui.js
+1. Put src/message-guard.js into your repo.
+2. Put apply-patch.js in repo root.
+3. Run:
+   node apply-patch.js
+4. You MUST now see src/server.js as modified.
+5. Commit BOTH:
+   src/server.js
+   src/message-guard.js
+6. Let Render redeploy.
 
-Modified:
-- server.js
-- economy-store.js
-- economy-router.js
-- auth-store.js (same working Phase 1 DB export)
+Verification in GitHub:
+Search src/server.js for:
+  menu button text accepted
 
-Adds:
-- persistent registration-aware /start
-- native-button /menu
-- Casino, Balance, Leaderboard, Games, Utilities, Help buttons
-- /help 1, /help 2, /help 3
-- /lb and /leaderboard
-- /casino and /games
-- /slots
-- /cf /coinflip
-- /dice
-- /roulette (red/black/even/odd/low/high/straight)
-- persistent games played/won/lost/wagered/casino profit stats
+If that text is absent, the patch is NOT installed.
 
-Casino multipliers/rules ported from the original Tempest Rimuru source:
-Slots 2-match 2x / 3-match 4x; coinflip 2x; dice exact-number 6x;
-European roulette even-money 2x and straight 36x.
-
-This phase intentionally leaves Blackjack/Mines and their stateful native gameplay
-for the next game batch rather than replacing the already-proven /mines transport test.
-
-After deploy:
-1. /start twice (first welcome, second welcome-back)
-2. /menu and press every button
-3. /help 1
-4. /lb
-5. /slots 1000
-6. /cf heads 1000
-7. /dice 3 1000
-8. /roulette red 1000
-9. redeploy and verify balance + registration + leaderboard persist.
+Behavior:
+- Known WhatsApp menu labels may pass fromMe filtering.
+- Ordinary fromMe messages stay ignored.
+- First 3 reply-triggering messages in 5 seconds pass.
+- 4th sends one warning and starts a random 5–10 second silence.
+- During silence Rimuru intentionally doesn't reply.
