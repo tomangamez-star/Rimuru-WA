@@ -135,4 +135,12 @@ async function closeAuthStore () {
   if (pool) await pool.end()
 }
 
-module.exports = { createAuthState, clearAuthState, closeAuthStore }
+async function pingDatabase () {
+  const db = database()
+  if (!db) throw new Error('DATABASE_URL is not configured')
+  const startedAt = Date.now()
+  await db.query('SELECT 1 AS ok')
+  return Date.now() - startedAt
+}
+
+module.exports = { createAuthState, clearAuthState, closeAuthStore, pingDatabase }

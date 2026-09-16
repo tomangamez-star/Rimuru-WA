@@ -1,12 +1,16 @@
 'use strict'
 
 const http = require('http')
+const fs = require('fs/promises')
+const path = require('path')
 const pino = require('pino')
-const { createAuthState, clearAuthState, closeAuthStore } = require('./auth-store')
+const { createAuthState, clearAuthState, closeAuthStore, pingDatabase } = require('./auth-store')
 const { createTelegramControl } = require('./telegram-control')
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
 const port = Number(process.env.PORT || 3000)
+const TEST_IMAGE_PATH = path.join(__dirname, '..', 'assets', 'speed-test.jpg')
+const API_IMAGE_URL = process.env.TEST_IMAGE_URL || 'https://picsum.photos/900/1200.jpg'
 
 class WhatsAppConnection {
   constructor () {
@@ -67,7 +71,13 @@ class WhatsAppConnection {
     })
     sock.ev.on('messages.upsert', ({ messages, type }) => {
       if (type !== 'notify') return
-      for (const message of messages) void this.handleMessage(sock, message)
+      for (const message of messages) {
+        void this.handleMessage(sock, message).catch(async (error) => {
+          logger.error({ err: error, jid: message?.key?.remoteJid }, 'WhatsApp test command failed')
+          const jid = message?.key?.remoteJid
+          if (jid) await sock.sendMessage(jid, { text: `Test failed: ${error.message}` }, { quoted: message }).catch(() => {})
+        })
+      }
     })
     sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
       if (this.generation !== currentGeneration || this.sock !== sock) return
@@ -151,19 +161,77 @@ class WhatsAppConnection {
     if (this.seen.size > 2000) this.seen.clear()
     const content = message.message || {}
     const text = String(content.conversation || content.extendedTextMessage?.text || '').trim().toLowerCase()
-    if (text !== '/ping' && text !== '/test') return
+    if (!['/ping', '/test', '/dbping', '/image', '/api'].includes(text)) return
 
     const receivedAt = Date.now()
     const timestamp = Number(message.messageTimestamp?.toString?.() || message.messageTimestamp)
     const deliveryMs = Number.isFinite(timestamp) ? Math.max(0, receivedAt - timestamp * 1000) : null
-    const reply = [
-      'Pong 🏓',
-      `Processing: ${Date.now() - receivedAt} ms`,
-      deliveryMs == null ? 'Delivery: unavailable' : `Delivery: ~${deliveryMs} ms`,
-      `UTC: ${new Date(receivedAt).toISOString()}`
-    ].join('\n')
-    await sock.sendMessage(jid, { text: reply }, { quoted: message })
-    logger.info({ command: text, jid, deliveryMs, handlerMs: Date.now() - receivedAt }, 'WhatsApp ping replied')
+    if (text === '/ping' || text === '/test') {
+      const reply = [
+        'Pong 🏓',
+        `Processing: ${Date.now() - receivedAt} ms`,
+        deliveryMs == null ? 'Delivery: unavailable' : `Delivery: ~${deliveryMs} ms`,
+        `UTC: ${new Date(receivedAt).toISOString()}`
+      ].join('\n')
+      await sock.sendMessage(jid, { text: reply }, { quoted: message })
+      logger.info({ command: text, jid, deliveryMs, handlerMs: Date.now() - receivedAt }, 'WhatsApp ping replied')
+      return
+    }
+
+    if (text === '/dbping') {
+      const queryMs = await pingDatabase()
+      const beforeSend = Date.now()
+      await sock.sendMessage(jid, { text: [
+        'Database test ✅',
+        `Supabase query: ${queryMs} ms`,
+        `Before upload: ${beforeSend - receivedAt} ms`,
+        deliveryMs == null ? 'Delivery: unavailable' : `Delivery: ~${deliveryMs} ms`
+      ].join('\n') }, { quoted: message })
+      logger.info({ command: text, jid, queryMs, sendMs: Date.now() - beforeSend, totalMs: Date.now() - receivedAt }, 'database test replied')
+      return
+    }
+
+    if (text === '/image') {
+      const readStarted = Date.now()
+      const image = await fs.readFile(TEST_IMAGE_PATH)
+      const readMs = Date.now() - readStarted
+      const uploadStarted = Date.now()
+      await sock.sendMessage(jid, {
+        image,
+        caption: `Bundled image test\nFile: ${(image.length / 1024).toFixed(1)} KB\nDisk read: ${readMs} ms`
+      }, { quoted: message })
+      const uploadMs = Date.now() - uploadStarted
+      await sock.sendMessage(jid, { text: [
+        'Image timing ✅',
+        `Disk read: ${readMs} ms`,
+        `WhatsApp upload: ${uploadMs} ms`,
+        `Total: ${Date.now() - receivedAt} ms`
+      ].join('\n') })
+      logger.info({ command: text, jid, bytes: image.length, readMs, uploadMs, totalMs: Date.now() - receivedAt }, 'bundled image test replied')
+      return
+    }
+
+    if (text === '/api') {
+      const fetchStarted = Date.now()
+      const response = await fetch(API_IMAGE_URL, { signal: AbortSignal.timeout(20000) })
+      if (!response.ok) throw new Error(`Image API returned HTTP ${response.status}`)
+      const image = Buffer.from(await response.arrayBuffer())
+      if (image.length > 8 * 1024 * 1024) throw new Error('Image API returned more than 8 MB')
+      const fetchMs = Date.now() - fetchStarted
+      const uploadStarted = Date.now()
+      await sock.sendMessage(jid, {
+        image,
+        caption: `External API image test\nDownload: ${fetchMs} ms\nSize: ${(image.length / 1024).toFixed(1)} KB`
+      }, { quoted: message })
+      const uploadMs = Date.now() - uploadStarted
+      await sock.sendMessage(jid, { text: [
+        'API timing ✅',
+        `Download: ${fetchMs} ms`,
+        `WhatsApp upload: ${uploadMs} ms`,
+        `Total: ${Date.now() - receivedAt} ms`
+      ].join('\n') })
+      logger.info({ command: text, jid, bytes: image.length, fetchMs, uploadMs, totalMs: Date.now() - receivedAt }, 'external API test replied')
+    }
   }
 
   async stop () {
