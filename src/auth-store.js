@@ -42,7 +42,6 @@ async function postgresAuthState (baileys) {
   await ensureSchema()
   const db = database()
   const { BufferJSON, initAuthCreds, proto } = baileys
-
   const decode = (value) => JSON.parse(value, BufferJSON.reviver)
   const encode = (value) => JSON.stringify(value, BufferJSON.replacer)
   const read = async (key) => {
@@ -50,14 +49,10 @@ async function postgresAuthState (baileys) {
     return result.rows[0] ? decode(result.rows[0].value) : null
   }
   const write = async (key, value) => {
-    await db.query(`
-      INSERT INTO rimuru_wa_auth(session_id,item_key,value,updated_at)
-      VALUES($1,$2,$3,NOW())
-      ON CONFLICT(session_id,item_key)
-      DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()
-    `, [sessionId, key, encode(value)])
+    await db.query(`INSERT INTO rimuru_wa_auth(session_id,item_key,value,updated_at)
+      VALUES($1,$2,$3,NOW()) ON CONFLICT(session_id,item_key)
+      DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()`, [sessionId, key, encode(value)])
   }
-
   const creds = (await read('creds')) || initAuthCreds()
   return {
     state: {
@@ -73,9 +68,7 @@ async function postgresAuthState (baileys) {
             const raw = rows.get(`key:${type}:${id}`)
             if (!raw) continue
             let value = decode(raw)
-            if (type === 'app-state-sync-key' && value && proto?.Message?.AppStateSyncKeyData) {
-              value = proto.Message.AppStateSyncKeyData.fromObject(value)
-            }
+            if (type === 'app-state-sync-key' && value && proto?.Message?.AppStateSyncKeyData) value = proto.Message.AppStateSyncKeyData.fromObject(value)
             output[id] = value
           }
           return output
@@ -87,25 +80,17 @@ async function postgresAuthState (baileys) {
             for (const [type, entries] of Object.entries(data || {})) {
               for (const [id, value] of Object.entries(entries || {})) {
                 const key = `key:${type}:${id}`
-                if (value == null) {
-                  await client.query('DELETE FROM rimuru_wa_auth WHERE session_id=$1 AND item_key=$2', [sessionId, key])
-                } else {
-                  await client.query(`
-                    INSERT INTO rimuru_wa_auth(session_id,item_key,value,updated_at)
-                    VALUES($1,$2,$3,NOW())
-                    ON CONFLICT(session_id,item_key)
-                    DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()
-                  `, [sessionId, key, encode(value)])
-                }
+                if (value == null) await client.query('DELETE FROM rimuru_wa_auth WHERE session_id=$1 AND item_key=$2', [sessionId, key])
+                else await client.query(`INSERT INTO rimuru_wa_auth(session_id,item_key,value,updated_at)
+                  VALUES($1,$2,$3,NOW()) ON CONFLICT(session_id,item_key)
+                  DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()`, [sessionId, key, encode(value)])
               }
             }
             await client.query('COMMIT')
           } catch (error) {
             await client.query('ROLLBACK')
             throw error
-          } finally {
-            client.release()
-          }
+          } finally { client.release() }
         }
       }
     },
@@ -120,27 +105,16 @@ async function createAuthState (baileys) {
   const state = await baileys.useMultiFileAuthState(localDir)
   return { ...state, storage: 'local' }
 }
-
 async function clearAuthState () {
-  fs.rmSync(localDir, { recursive: true, force: true })
-  fs.mkdirSync(localDir, { recursive: true })
+  fs.rmSync(localDir, { recursive: true, force: true }); fs.mkdirSync(localDir, { recursive: true })
   const db = database()
-  if (db) {
-    await ensureSchema()
-    await db.query('DELETE FROM rimuru_wa_auth WHERE session_id=$1', [sessionId])
-  }
+  if (db) { await ensureSchema(); await db.query('DELETE FROM rimuru_wa_auth WHERE session_id=$1', [sessionId]) }
 }
-
-async function closeAuthStore () {
-  if (pool) await pool.end()
-}
-
+async function closeAuthStore () { if (pool) await pool.end() }
 async function pingDatabase () {
   const db = database()
   if (!db) throw new Error('DATABASE_URL is not configured')
-  const startedAt = Date.now()
-  await db.query('SELECT 1 AS ok')
-  return Date.now() - startedAt
+  const startedAt = Date.now(); await db.query('SELECT 1 AS ok'); return Date.now() - startedAt
 }
 
-module.exports = { createAuthState, clearAuthState, closeAuthStore, pingDatabase }
+module.exports = { createAuthState, clearAuthState, closeAuthStore, pingDatabase, database }
