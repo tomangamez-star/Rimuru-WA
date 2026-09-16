@@ -1,0 +1,11 @@
+RIMURU-WA PHASE 1 — src/auth-store.js
+
+Only change the final export line.
+
+CURRENT:
+module.exports = { createAuthState, clearAuthState, closeAuthStore, pingDatabase }
+
+REPLACE WITH:
+module.exports = { createAuthState, clearAuthState, closeAuthStore, pingDatabase, database }
+
+Nothing else in auth-store.js changes.

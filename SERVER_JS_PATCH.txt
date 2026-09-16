@@ -1,0 +1,43 @@
+RIMURU-WA PHASE 1 — src/server.js INTEGRATION
+
+The current server.js contains the proven pairing/button transport. Do NOT replace it wholesale.
+Make only these three edits.
+
+1) Near the top, after the existing require(...) lines, add:
+
+const { database } = require('./auth-store')
+const { createEconomyStore } = require('./economy-store')
+const { createEconomyRouter } = require('./economy-router')
+
+IMPORTANT: the existing auth-store require currently looks like:
+const { createAuthState, clearAuthState, closeAuthStore, pingDatabase } = require('./auth-store')
+
+Change that SAME line to:
+const { createAuthState, clearAuthState, closeAuthStore, pingDatabase, database } = require('./auth-store')
+
+Then only add:
+const { createEconomyStore } = require('./economy-store')
+const { createEconomyRouter } = require('./economy-router')
+
+
+2) After:
+const MENU_CAPTION = [
+  ...
+].join('\n')
+
+add:
+
+const economy = createEconomyStore({ database, logger })
+const routeEconomy = createEconomyRouter({ economy, logger })
+
+
+3) In handleMessage(), immediately after this existing line:
+
+const content = this.baileys.normalizeMessageContent(message.message) || {}
+
+add:
+
+if (await routeEconomy(sock, message, content)) return
+
+
+No other server.js changes are required.
