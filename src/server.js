@@ -10,7 +10,37 @@ const { createTelegramControl } = require('./telegram-control')
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
 const port = Number(process.env.PORT || 3000)
 const TEST_IMAGE_PATH = path.join(__dirname, '..', 'assets', 'speed-test.jpg')
+const MENU_IMAGE_PATH = path.join(__dirname, '..', 'assets', 'ryuden-menu.jpg')
 const API_IMAGE_URL = process.env.TEST_IMAGE_URL || 'https://picsum.photos/900/1200.jpg'
+const MENU_CAPTION = [
+  '╭━━━〔 🌊 *WELCOME TO RYUDEN* 🌊 〕━━━╮',
+  '',
+  'Hey there! I’m *Rimuru* — guardian of the JTF Casino and your cheerful guide through Ryuden. 💙',
+  '',
+  'Here, luck meets strategy and friendships are forged. Whether you came to test your fortune, explore the realm, or relax with the crew, there’s a place for you. ✨',
+  '',
+  'Please play fairly, respect every member, and remember: even the greatest legends started with a single roll. 🎲',
+  '',
+  '╭───〔 🧪 *ACTIVE TEST COMMANDS* 〕───╮',
+  '│ 🏓 */ping* — instant response test',
+  '│ ⚡ */test* — alternate speed test',
+  '│ 🗄️ */dbping* — Supabase query test',
+  '│ 🖼️ */image* — bundled image upload',
+  '│ 🌐 */api* — external image test',
+  '│ 📜 */menu* — show this welcome menu',
+  '╰────────────────────────────╯',
+  '',
+  '╭────〔 🎰 *JTF CASINO STATUS* 〕────╮',
+  '│ Realm: *RYUDEN*',
+  '│ Guardian: *RIMURU TEMPEST*',
+  '│ Connection: *ONLINE* 🟢',
+  '│ Mode: *SPEED TEST PHASE*',
+  '╰────────────────────────────╯',
+  '',
+  'May fortune favour the brave—and may Ryuden always feel like home. 🏰💫',
+  '',
+  '╰━━━━━━━〔 *JTF • RYUDEN* 〕━━━━━━━╯'
+].join('\n')
 
 class WhatsAppConnection {
   constructor () {
@@ -161,7 +191,7 @@ class WhatsAppConnection {
     if (this.seen.size > 2000) this.seen.clear()
     const content = message.message || {}
     const text = String(content.conversation || content.extendedTextMessage?.text || '').trim().toLowerCase()
-    if (!['/ping', '/test', '/dbping', '/image', '/api'].includes(text)) return
+    if (!['/ping', '/test', '/dbping', '/image', '/api', '/menu'].includes(text)) return
 
     const receivedAt = Date.now()
     const timestamp = Number(message.messageTimestamp?.toString?.() || message.messageTimestamp)
@@ -231,6 +261,24 @@ class WhatsAppConnection {
         `Total: ${Date.now() - receivedAt} ms`
       ].join('\n') })
       logger.info({ command: text, jid, bytes: image.length, fetchMs, uploadMs, totalMs: Date.now() - receivedAt }, 'external API test replied')
+      return
+    }
+
+    if (text === '/menu') {
+      const readStarted = Date.now()
+      const image = await fs.readFile(MENU_IMAGE_PATH)
+      const readMs = Date.now() - readStarted
+      const uploadStarted = Date.now()
+      await sock.sendMessage(jid, { image, caption: MENU_CAPTION }, { quoted: message })
+      logger.info({
+        command: text,
+        jid,
+        bytes: image.length,
+        captionChars: MENU_CAPTION.length,
+        readMs,
+        uploadMs: Date.now() - uploadStarted,
+        totalMs: Date.now() - receivedAt
+      }, 'menu replied')
     }
   }
 
