@@ -13,8 +13,16 @@ function cardKeyFromRow (r) {
 function normCard (r) { return r ? { ...r, card_key: cardKeyFromRow(r) } : null }
 function tierStars (tier) { const n = Math.max(1, Math.min(6, Number(tier) || 1)); return '⭐'.repeat(n) }
 function cardTitle (c) { return `#${c.card_key} • ${c.name || 'Unknown Character'}` }
-function spawnCaption (c) {
-  return `🃏 *CARD SPAWNED*\n\n*${c.name || 'Unknown Character'}*\n🎬 ${c.series || 'Unknown Series'}\n${tierStars(c.tier)} *T${c.tier || 1}*\n🆔 Card: *#${c.card_key}*\n\nUse *!claim card ${c.card_key}* to claim.`
+function makeClaimCode () { return String(Math.floor(1000 + Math.random() * 90000)) }
+function spawnCaption (c, code) {
+  return `🃏 *CARD SPAWNED*
+
+*${c.name || 'Unknown Character'}*
+🎬 ${c.series || 'Unknown Series'}
+${tierStars(c.tier)} *T${c.tier || 1}*
+🆔 Claim ID: *${code}*
+
+Use *!claim card ${code}* to claim.`
 }
 
 let ready = false
@@ -30,10 +38,12 @@ async function ensureSchema () {
     );
     CREATE INDEX IF NOT EXISTS rimuru_wa_card_claims_user_idx ON rimuru_wa_card_claims(user_id, claimed_at DESC);
     CREATE TABLE IF NOT EXISTS rimuru_wa_card_spawns(
-      group_jid TEXT PRIMARY KEY, card_key TEXT NOT NULL, card_name TEXT NOT NULL DEFAULT '', series TEXT NOT NULL DEFAULT '', tier INT NOT NULL DEFAULT 1,
+      group_jid TEXT PRIMARY KEY, card_key TEXT NOT NULL, claim_code TEXT, card_name TEXT NOT NULL DEFAULT '', series TEXT NOT NULL DEFAULT '', tier INT NOT NULL DEFAULT 1,
       source_url TEXT NOT NULL DEFAULT '', telegram_file_id TEXT NOT NULL DEFAULT '', telegram_media_type TEXT NOT NULL DEFAULT 'photo',
       spawned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW()+INTERVAL '10 minutes', claimed_by TEXT
     );
+    ALTER TABLE rimuru_wa_card_spawns ADD COLUMN IF NOT EXISTS claim_code TEXT;
+    CREATE INDEX IF NOT EXISTS rimuru_wa_card_spawns_claim_code_idx ON rimuru_wa_card_spawns(claim_code);
   `)
   ready = true
 }
@@ -46,6 +56,18 @@ async function archiveByKey (key) {
     FROM shoob_cards WHERE (substring(source_url from '/cards/info/([^/?#]+)')=$1 OR telegram_message_id::text=$1)${archiveSql} LIMIT 1`, params)
   return normCard(q.rows[0])
 }
+async function archiveByNameTier (name, tier) {
+  const archiveId = String(process.env.TELEGRAM_CARD_ARCHIVE_CHAT_ID || '').trim()
+  const params = [`%${String(name).trim()}%`, Number(tier)]
+  let archiveSql = ''
+  if (archiveId) { params.push(archiveId); archiveSql = ' AND archive_chat_id::text=$3' }
+  const q = await db().query(`SELECT source_url,name,normalized_name,series,tier,media_url,media_type,telegram_file_id,telegram_media_type,telegram_message_id,archive_chat_id
+    FROM shoob_cards
+    WHERE (name ILIKE $1 OR normalized_name ILIKE $1) AND tier=$2${archiveSql}
+    ORDER BY CASE WHEN lower(name)=lower(replace($1,'%','')) THEN 0 ELSE 1 END, telegram_message_id DESC NULLS LAST
+    LIMIT 10`, params)
+  return q.rows.map(normCard)
+}
 async function randomArchiveCard () {
   const archiveId=String(process.env.TELEGRAM_CARD_ARCHIVE_CHAT_ID||'').trim()
   const q = await db().query(`SELECT s.source_url,s.name,s.normalized_name,s.series,s.tier,s.media_url,s.media_type,s.telegram_file_id,s.telegram_media_type,s.telegram_message_id,s.archive_chat_id
@@ -53,29 +75,39 @@ async function randomArchiveCard () {
     WHERE c.card_key IS NULL AND COALESCE(s.telegram_file_id,'')<>'' ${archiveId?'AND s.archive_chat_id::text=$1':''} ORDER BY RANDOM() LIMIT 1`,archiveId?[archiveId]:[])
   return normCard(q.rows[0])
 }
+async function uniqueClaimCode () {
+  for (let i = 0; i < 20; i++) {
+    const code = makeClaimCode()
+    const q = await db().query('SELECT 1 FROM rimuru_wa_card_spawns WHERE claim_code=$1 AND claimed_by IS NULL AND expires_at>NOW() LIMIT 1', [code])
+    if (!q.rowCount) return code
+  }
+  return String(Date.now()).slice(-5)
+}
 async function spawn (groupJid, card) {
   await ensureSchema()
-  await db().query(`INSERT INTO rimuru_wa_card_spawns(group_jid,card_key,card_name,series,tier,source_url,telegram_file_id,telegram_media_type,spawned_at,expires_at,claimed_by)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW()+INTERVAL '10 minutes',NULL)
-    ON CONFLICT(group_jid) DO UPDATE SET card_key=EXCLUDED.card_key,card_name=EXCLUDED.card_name,series=EXCLUDED.series,tier=EXCLUDED.tier,source_url=EXCLUDED.source_url,telegram_file_id=EXCLUDED.telegram_file_id,telegram_media_type=EXCLUDED.telegram_media_type,spawned_at=NOW(),expires_at=NOW()+INTERVAL '10 minutes',claimed_by=NULL`,
-  [groupJid, card.card_key, card.name || '', card.series || '', Number(card.tier) || 1, card.source_url || '', card.telegram_file_id || '', card.telegram_media_type || 'photo'])
+  const code = await uniqueClaimCode()
+  await db().query(`INSERT INTO rimuru_wa_card_spawns(group_jid,card_key,claim_code,card_name,series,tier,source_url,telegram_file_id,telegram_media_type,spawned_at,expires_at,claimed_by)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW()+INTERVAL '10 minutes',NULL)
+    ON CONFLICT(group_jid) DO UPDATE SET card_key=EXCLUDED.card_key,claim_code=EXCLUDED.claim_code,card_name=EXCLUDED.card_name,series=EXCLUDED.series,tier=EXCLUDED.tier,source_url=EXCLUDED.source_url,telegram_file_id=EXCLUDED.telegram_file_id,telegram_media_type=EXCLUDED.telegram_media_type,spawned_at=NOW(),expires_at=NOW()+INTERVAL '10 minutes',claimed_by=NULL`,
+  [groupJid, card.card_key, code, card.name || '', card.series || '', Number(card.tier) || 1, card.source_url || '', card.telegram_file_id || '', card.telegram_media_type || 'photo'])
+  return code
 }
-async function claim (groupJid, userId, key) {
+async function claim (groupJid, userId, code) {
   await ensureSchema()
   const q = await db().query(`WITH won AS (
       UPDATE rimuru_wa_card_spawns SET claimed_by=$2
-      WHERE group_jid=$1 AND card_key=$3 AND claimed_by IS NULL AND expires_at>NOW()
-        AND NOT EXISTS(SELECT 1 FROM rimuru_wa_card_claims WHERE card_key=$3)
+      WHERE group_jid=$1 AND claim_code=$3 AND claimed_by IS NULL AND expires_at>NOW()
+        AND NOT EXISTS(SELECT 1 FROM rimuru_wa_card_claims c WHERE c.card_key=rimuru_wa_card_spawns.card_key)
       RETURNING *
     ), ins AS (
       INSERT INTO rimuru_wa_card_claims(card_key,user_id,card_name,series,tier,source_url,telegram_file_id,telegram_media_type,claimed_group_jid)
       SELECT card_key,$2,card_name,series,tier,source_url,telegram_file_id,telegram_media_type,$1 FROM won
       ON CONFLICT(card_key) DO NOTHING RETURNING *
-    ) SELECT * FROM ins`, [groupJid, userId, String(key)])
+    ) SELECT * FROM ins`, [groupJid, userId, String(code)])
   if (q.rows[0]) return { ok: true, card: q.rows[0] }
-  const active = (await db().query('SELECT card_key,claimed_by,expires_at FROM rimuru_wa_card_spawns WHERE group_jid=$1', [groupJid])).rows[0]
+  const active = (await db().query('SELECT card_key,claim_code,claimed_by,expires_at FROM rimuru_wa_card_spawns WHERE group_jid=$1', [groupJid])).rows[0]
   if (!active) return { ok: false, message: '🃏 There is no active card spawn in this group.' }
-  if (String(active.card_key) !== String(key)) return { ok: false, message: `❌ Wrong card ID. The active spawn is *#${active.card_key}*.` }
+  if (String(active.claim_code) !== String(code)) return { ok: false, message: '❌ Wrong claim ID.' }
   if (active.claimed_by) return { ok: false, message: '💨 Too late — somebody already claimed this card.' }
   if (new Date(active.expires_at).getTime() <= Date.now()) return { ok: false, message: '⌛ That card spawn expired.' }
   return { ok: false, message: '💨 Too late — that card is already owned.' }
@@ -96,12 +128,12 @@ function createCards ({ logger }) {
     const name = displayName(m) || 'Player'
     const raw = String(content.conversation || content.extendedTextMessage?.text || '').trim()
     if (!raw) return false
-    const claimMatch = raw.match(/^!claim\s+card\s+#?([a-zA-Z0-9._-]+)\s*$/i)
+    const claimMatch = raw.match(/^!claim\s+card\s+#?(\d{4,5})\s*$/i)
     if (claimMatch) {
       if (!(await registered(id))) { await send(sock, jid, m, '🌊 Use */start* first to register with Rimuru.'); return true }
       if (!jid.endsWith('@g.us')) { await send(sock, jid, m, '🃏 Cards can only be claimed from a group spawn.'); return true }
       const r = await claim(jid, id, claimMatch[1])
-      await send(sock, jid, m, r.ok ? `🎉 *CARD CLAIMED!*\n\n👤 *${name}* claimed *#${r.card.card_key} — ${r.card.card_name}*\n${tierStars(r.card.tier)} T${r.card.tier}\n\nUse */collection* to view your cards.` : r.message)
+      await send(sock, jid, m, r.ok ? `🎉 *CARD CLAIMED!*\n\n👤 *${name}* claimed *${r.card.card_name}*\n${tierStars(r.card.tier)} T${r.card.tier}\n\nUse */collection* to view your cards.` : r.message)
       return true
     }
     if (!raw.startsWith('/')) return false
@@ -120,14 +152,30 @@ function createCards ({ logger }) {
       await send(sock, jid, m, `🎴 *${name.toUpperCase()} • COLLECTION*\n\nOwned: *${c.total}*\n\n${body}${c.total > c.rows.length ? `\n\n_Showing ${c.rows.length}/${c.total}._` : ''}`)
       return true
     }
-    if (cmd === '/cardinfo' || cmd === '/card') {
+    if (cmd === '/card') {
+      if (!(isOwner(id) || await isModerator(id))) { await send(sock, jid, m, '🛡️ */card* archive search is for Rimuru moderators only.'); return true }
+      const tierArg = args.find(x => /^t[1-6]$/i.test(x))
+      const tier = tierArg ? Number(tierArg.slice(1)) : 0
+      const searchName = args.filter(x => x !== tierArg).join(' ').trim()
+      if (!searchName || !tier) { await send(sock, jid, m, 'Use */card <character> t<tier>*\\nExample: */card Goku t5*'); return true }
+      const matches = await archiveByNameTier(searchName, tier)
+      if (!matches.length) { await send(sock, jid, m, `❌ No *${searchName} T${tier}* card was found in the archive.`); return true }
+      if (matches.length > 1) {
+        const list = matches.slice(0, 8).map((x, i) => `${i + 1}. *${x.name}* — ${x.series || 'Unknown'} • T${x.tier}`).join('\\n')
+        await send(sock, jid, m, `🔎 *${matches.length} MATCHES FOUND*\\n\\n${list}\\n\\nRefine the character name to narrow it down.`)
+        return true
+      }
+      const card = matches[0]
+      const info = `🃏 *${card.name}*\\n${tierStars(card.tier)} T${card.tier}\\n🎬 ${card.series || 'Unknown Series'}`
+      try { await media.sendCardMedia(sock, jid, card, info, m) } catch (e) { logger.warn({ err: e, card: card.card_key }, 'card search media send failed'); await send(sock, jid, m, `⚠️ Card found, but archive media could not be fetched.\\n\\n${e.message}`) }
+      return true
+    }
+    if (cmd === '/cardinfo') {
       const key = String(args[0] || '').replace(/^#/, '')
-      if (!key) { await send(sock, jid, m, `Use *${cmd} <card id>*.`); return true }
+      if (!key) { await send(sock, jid, m, 'Use */cardinfo <archive card id>*.'); return true }
       const owned = await ownedCard(key), card = owned || await archiveByKey(key)
-      if (!card) { await send(sock, jid, m, `❌ Card *#${key}* wasn't found in the shared archive catalogue.`); return true }
-      const info = `🃏 *${cardTitle({ ...card, card_key: key, name: card.card_name || card.name })}*\n${tierStars(card.tier)} T${card.tier}\n🎬 ${card.series || 'Unknown Series'}${owned ? `\n👤 Owned: *Yes*` : '\n👤 Owned: *No*'}`
-      if (cmd === '/cardinfo') { await send(sock, jid, m, info); return true }
-      try { await media.sendCardMedia(sock, jid, { ...card, card_key: key }, info, m) } catch (e) { logger.warn({ err: e, card: key }, 'card media send failed'); await send(sock, jid, m, `⚠️ Card metadata was found, but the archive media could not be fetched.\n\n${e.message}`) }
+      if (!card) { await send(sock, jid, m, '❌ Card was not found in the shared archive catalogue.'); return true }
+      await send(sock, jid, m, `🃏 *${cardTitle({ ...card, card_key: key, name: card.card_name || card.name })}*\\n${tierStars(card.tier)} T${card.tier}\\n🎬 ${card.series || 'Unknown Series'}${owned ? '\\n👤 Owned: *Yes*' : '\\n👤 Owned: *No*'}`)
       return true
     }
     if (cmd === '/spawncard') {
@@ -137,8 +185,8 @@ function createCards ({ logger }) {
       const card = key ? await archiveByKey(key) : await randomArchiveCard()
       if (!card) { await send(sock, jid, m, key ? `❌ Archive card *#${key}* was not found.` : '❌ No unowned archive card is available.'); return true }
       if (await ownedCard(card.card_key)) { await send(sock, jid, m, `💨 *#${card.card_key}* is already owned. Pick another card.`); return true }
-      await spawn(jid, card)
-      try { await media.sendCardMedia(sock, jid, card, spawnCaption(card), m) } catch (e) { logger.warn({ err: e, card: card.card_key }, 'card spawn media failed'); await send(sock, jid, m, `⚠️ Spawn prepared but media fetch failed, so the spawn was cancelled.\n\n${e.message}`); await db().query('DELETE FROM rimuru_wa_card_spawns WHERE group_jid=$1 AND card_key=$2', [jid, card.card_key]); return true }
+      const code = await spawn(jid, card)
+      try { await media.sendCardMedia(sock, jid, card, spawnCaption(card, code), m) } catch (e) { logger.warn({ err: e, card: card.card_key }, 'card spawn media failed'); await send(sock, jid, m, `⚠️ Spawn prepared but media fetch failed, so the spawn was cancelled.\n\n${e.message}`); await db().query('DELETE FROM rimuru_wa_card_spawns WHERE group_jid=$1 AND card_key=$2', [jid, card.card_key]); return true }
       return true
     }
     return false
@@ -146,4 +194,4 @@ function createCards ({ logger }) {
   return { handle, ensureSchema }
 }
 
-module.exports = { createCards, ensureSchema, archiveByKey, randomArchiveCard, claim, collection }
+module.exports = { createCards, ensureSchema, archiveByKey, archiveByNameTier, randomArchiveCard, claim, collection }
