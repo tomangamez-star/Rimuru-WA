@@ -1,30 +1,22 @@
-RIMURU-WA — WHATSAPP RPG UI UPGRADE
+RIMURU-WA — GROQ AI + UNIVERSAL WHATSAPP BUTTONS
 
-REPLACE:
-  src/ui.js
-  src/rpg.js
-  src/rpg-store.js
-  src/economy-store.js
-  src/economy-router.js
+Replace/upload the src files in this ZIP. No installer.
 
-This is a complete-file package. No installer scripts.
+Render environment:
+GROQ_API_KEY=<your Groq key>
+Optional: GROQ_MODEL=llama-3.3-70b-versatile
+OWNER_NUMBER=234...
 
-CHANGES
-- /start now sends the existing Ryuden welcome image, then native WhatsApp path buttons:
-  ⚔️ Enter Odyssey
-  🎰 Enter Casino
-  📜 Main Menu
-- RPG is now button-first instead of Telegram-style command dumps.
-- /rpg opens a compact WhatsApp dashboard.
-- Native buttons navigate Explore, Master, Inventory, Guild, Odyssey, Daily, and back.
-- Master selection is button-based.
-- Exploration results offer Continue / Inventory / RPG Home buttons.
-- Registration gate remains global.
-- Guild admin-vote system remains.
-- /addcoin and /setbal remain owner-only.
-- AI master/NPC communication is intentionally NOT connected yet. The button/state placeholder is prepared, but deterministic game state remains authoritative.
-- Existing server.js/message-guard.js remain untouched.
-
-IMPORTANT SERVER NOTE
-Your server's interactive callback dispatcher must pass IDs beginning with rpg_ and start_ to ui.section(), not only menu_/casino_.
-If your current server.js still filters IDs to only menu_ or casino_, the new buttons will render but taps will not route.
+Included:
+- Universal native-button routing for menu_, casino_, start_, rpg_.
+- Visible-label fallback for WhatsApp self/sync button messages.
+- Start -> Odyssey/Casino buttons.
+- RPG navigation + Master selection buttons.
+- /ai on | /ai off
+- Rimuru ordinary AI chat in DMs.
+- Group AI only on Rimuru mention/reply.
+- Talk to Master button or /talk; /endtalk returns to Rimuru.
+- Master receives actual rank, level, bond, Odyssey part, wins/losses.
+- Groq uses Node 22 built-in fetch; no npm AI SDK required.
+- AI cannot modify authoritative economy/RPG state.
+- Groq failure does not break game systems.
