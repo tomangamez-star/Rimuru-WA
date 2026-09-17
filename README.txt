@@ -1,45 +1,28 @@
-RIMURU WA — ODYSSEY WORLD + COMBAT V2
+RIMURU WA — ODYSSEY COMPLETION PASS V4
 
-Replace the included src files in Rimuru-WA with these files.
-No installer script.
+Replace package.json and src/economy-router.js, then ADD the other included src files.
+No existing server.js, ui.js, rpg.js, rpg-store.js or ai.js needs to be overwritten.
+The package start command preloads the upgrade layer cleanly over the current deployed base.
 
-Original Owner
-- WhatsApp number recognized in code: 2349110799878
-- /owner or /ownerpanel
-- /addcoin and /setbal remain Original-Owner only.
-- /ai global on|off is Original-Owner only.
-- Regular users can still /ai on|off for their own conversation preference; this does not change global AI state.
+Included:
+- Persistent /mod add, /mod remove, /mod list (Original Owner only)
+- /endmission confirmation + /missions log
+- NPC conversation closes when mission is abandoned
+- NPC hard knowledge boundary; meta/bot/AI/bug questions route to Rimuru
+- NPC replies capped to 1–3 short sentences
+- Master hard knowledge boundary; meta questions route to Rimuru
+- Persistent Supabase scoped AI memories: Rimuru, each Master, each NPC
+- Memory extraction for names/nicknames, age, likes/dislikes, favorites, preferences
+- 15-part authored Odyssey I story layer and progression
+- Story boss encounters at Parts 5, 10 and 15
+- Faster combat: normal fights target roughly 4–5 good attacks
+- One combined combat result + next-turn interface per action
 
-Major RPG changes
-- Turn-based owned combat windows: Attack, Guard, Skill, Item, Ultimate, Retreat.
-- Persistent active battle state in Supabase.
-- Technique inspection and upgrades.
-- Shop with RPG Gold and rarer Gem purchases.
-- Master training: RPG Gold cost, 30-minute cooldown, stat growth, Bond growth.
-- Master chat can earn +1 Bond at most once per 5 minutes.
-- Master ultimate unlock milestone at 60 Bond through training.
-- 10 exploration advances per rolling 15-minute window.
-- Fixed Odyssey I plot foundation: The Thirteenth Echo.
-- Persistent story flags and NPC state.
-- Kael NPC scene with free-form AI conversation plus Accept/Decline quest choice.
-- NPC messages are named so users know who is speaking.
-- AI never directly mutates authoritative story/reward/combat state.
-- Stronger Master personality prompting, including Gojo/Sukuna profiles.
-- /lb now opens Wealth vs Odyssey leaderboard choices.
-- /wealthlb (or /wlb) = wealth leaderboard.
-- /rlb = Odyssey leaderboard.
-- Leaderboard name formatting cleaned up.
-
-Existing Optimization V1 preserved
-- Player-owned RPG windows.
-- Global outgoing WhatsApp burst guard.
-- 60-master archive, max 4 per franchise.
-- Groq automatic model fallback.
-
-Groq
-- GROQ_API_KEY required for live AI.
-- GROQ_MODEL optional.
-- Automatic fallback: openai/gpt-oss-20b -> openai/gpt-oss-120b.
-
-Database
-- RPG schema auto-migrates with additive columns for training, exploration history, techniques, story state and active battle.
+TEST AFTER DEPLOY:
+/mod list
+/missions
+/endmission
+/story
+/combat
+/talk then tell Master a preference; later restart/redeploy and mention it naturally
+During NPC talk ask a bot/meta question; Rimuru should answer instead of the NPC.
