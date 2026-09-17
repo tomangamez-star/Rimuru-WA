@@ -41,12 +41,29 @@ function nativeFlowSelection(content={}) {
 }
 
 function isKnownButtonInteraction(content={}) {
+  if(resolveButtonId(content))return true
   const text=visibleText(content).toLocaleLowerCase()
   if(BUTTON_LABELS.has(text))return true
   const listId=String(content.listResponseMessage?.singleSelectReply?.selectedRowId||'')
   if(BUTTON_IDS.has(listId))return true
   const selected=nativeFlowSelection(content)
   return BUTTON_IDS.has(selected.id)||BUTTON_LABELS.has(selected.text.toLocaleLowerCase())
+}
+
+const LABEL_IDS = new Map([
+  ['🎰 casino','menu_casino'],['💰 balance','menu_balance'],['🏆 leaderboard','menu_leaderboard'],
+  ['🎮 games','menu_games'],['🛠️ utilities','menu_utilities'],['❓ help','menu_help'],['⬅️ menu','menu_main'],
+  ['🎰 slots','casino_slots_help'],['🪙 coin flip','casino_cf_help'],['🎲 dice','casino_dice_help'],['🎡 roulette','casino_roulette_help']
+].map(([label,id])=>[cleanLabel(label),id]))
+function cleanLabel(text){return String(text||'').replace(/[\u200b-\u200f\u2060\ufeff\ufe0f]/g,'').trim().replace(/\s+/g,' ').toLowerCase()}
+function resolveButtonId(content={}) {
+  const native=nativeFlowSelection(content)
+  const ids=[native.id,content.buttonsResponseMessage?.selectedButtonId,
+    content.templateButtonReplyMessage?.selectedId,content.listResponseMessage?.singleSelectReply?.selectedRowId]
+  for(const id of ids)if(typeof id==='string'&&BUTTON_IDS.has(id))return id
+  const labels=[visibleText(content),native.text,content.interactiveResponseMessage?.body?.text]
+  for(const label of labels){const id=LABEL_IDS.get(cleanLabel(label));if(id)return id}
+  return null
 }
 
 function isReplyTrigger(content={}) {
@@ -84,4 +101,4 @@ class ReplyRateLimiter {
     s.times.push(now);this.users.set(key,s);return {allowed:true}
   }
 }
-module.exports={isKnownButtonInteraction,isReplyTrigger,shouldHandleUpsert,nativeFlowSelection,visibleText,ReplyRateLimiter}
+module.exports={resolveButtonId,isKnownButtonInteraction,isReplyTrigger,shouldHandleUpsert,nativeFlowSelection,visibleText,ReplyRateLimiter}

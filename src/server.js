@@ -11,7 +11,7 @@ const { createEconomyStore } = require('./economy-store')
 const { createEconomyRouter } = require('./economy-router')
 const { createCasino } = require('./casino')
 const { createUi } = require('./ui')
-const { isKnownButtonInteraction, isReplyTrigger, shouldHandleUpsert, ReplyRateLimiter } = require('./message-guard')
+const { resolveButtonId, isKnownButtonInteraction, isReplyTrigger, shouldHandleUpsert, ReplyRateLimiter } = require('./message-guard')
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
 const port = Number(process.env.PORT || 3000)
@@ -59,9 +59,10 @@ class WhatsAppConnection {
     const jid=message?.key?.remoteJid,id=message?.key?.id
     if(!jid||!id||jid==='status@broadcast'||this.seen.has(id))return
     const content=this.baileys.normalizeMessageContent(message.message)||{}
-    // A tap made from the primary phone can be synced to Baileys as an
-    // `append` message with an unreliable fromMe value (especially with LIDs).
-    // Trust the known Rimuru button payload, not fromMe, for this narrow path.
+    const selectedButtonId=resolveButtonId(content)
+    if(Object.keys(content).some(key=>key.endsWith('ResponseMessage')||key==='templateButtonReplyMessage'))
+      logger.info({messageId:id,upsertType,fromMe:Boolean(message.key.fromMe),contentTypes:Object.keys(content),selectedButtonId},'button response decoded')
+    // Allow only known button payloads through the self-message/sync path.
     const knownButtonTap=isKnownButtonInteraction(content)
     if(!shouldHandleUpsert(content,{fromMe:Boolean(message.key.fromMe),type:upsertType}))return
     this.seen.set(id,Date.now());if(this.seen.size>2000)this.seen.clear()
@@ -78,6 +79,22 @@ class WhatsAppConnection {
       }
     }
     if(!ui)ui=createUi({economy,casino,logger,sendButtons:(s,j,b,f,d)=>this.sendNativeButtons(s,j,b,f,d)})
+    // Dispatch every supported reply envelope directly, before text-only routers.
+    if(selectedButtonId){
+      if(selectedButtonId.startsWith('menu_')||selectedButtonId.startsWith('casino_')){
+        await ui.section(sock,message,selectedButtonId)
+        logger.info({messageId:id,selectedButtonId},'button result sent')
+        return
+      }
+      if(selectedButtonId==='ryuden_enter'){
+        await sock.sendMessage(jid,{text:'🌊 Welcome to RYUDEN!\n\nEnter button received ✅\nJTF × Ryuden'},{quoted:message})
+        return
+      }
+      if(selectedButtonId.startsWith('mines_')){
+        await this.handleMinesButton(sock,message,`${jid}:${message.key.participant||jid}`,selectedButtonId)
+        return
+      }
+    }
     if(await ui.route(sock,message,content))return
     if(await routeEconomy(sock,message,content))return
     const playerId=message.key.participant||jid,gameKey=`${jid}:${playerId}`
