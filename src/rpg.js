@@ -86,6 +86,6 @@ function createRpg({economy,logger,sendButtons}){
   }
   return false
  }
- return{route,section,panel}
+ return{route,section,panel,getPlayer:(id)=>store.getPlayer(id)}
 }
 module.exports={createRpg}
