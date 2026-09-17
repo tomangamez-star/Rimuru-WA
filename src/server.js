@@ -11,7 +11,7 @@ const { createEconomyStore } = require('./economy-store')
 const { createEconomyRouter } = require('./economy-router')
 const { createCasino } = require('./casino')
 const { createUi } = require('./ui')
-const { isKnownButtonInteraction, isReplyTrigger, ReplyRateLimiter } = require('./message-guard')
+const { isKnownButtonInteraction, isReplyTrigger, shouldHandleUpsert, ReplyRateLimiter } = require('./message-guard')
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' })
 const port = Number(process.env.PORT || 3000)
@@ -59,11 +59,13 @@ class WhatsAppConnection {
     const jid=message?.key?.remoteJid,id=message?.key?.id
     if(!jid||!id||jid==='status@broadcast'||this.seen.has(id))return
     const content=this.baileys.normalizeMessageContent(message.message)||{}
-    const ownButtonTap=Boolean(message.key.fromMe&&isKnownButtonInteraction(content))
-    if(message.key.fromMe&&!ownButtonTap)return
-    if(upsertType==='append'&&!ownButtonTap)return
+    // A tap made from the primary phone can be synced to Baileys as an
+    // `append` message with an unreliable fromMe value (especially with LIDs).
+    // Trust the known Rimuru button payload, not fromMe, for this narrow path.
+    const knownButtonTap=isKnownButtonInteraction(content)
+    if(!shouldHandleUpsert(content,{fromMe:Boolean(message.key.fromMe),type:upsertType}))return
     this.seen.set(id,Date.now());if(this.seen.size>2000)this.seen.clear()
-    if(ownButtonTap)logger.info({jid,messageId:id,upsertType},'menu button tap accepted')
+    if(knownButtonTap)logger.info({jid,messageId:id,upsertType,fromMe:Boolean(message.key.fromMe)},'menu button tap accepted')
     if(isReplyTrigger(content)){
       const limit=this.replyLimiter.check(message)
       if(!limit.allowed){

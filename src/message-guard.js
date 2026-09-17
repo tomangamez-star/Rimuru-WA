@@ -55,6 +55,13 @@ function isReplyTrigger(content={}) {
   return REPLY_COMMANDS.has(command)
 }
 
+function shouldHandleUpsert(content={}, {fromMe=false,type='notify'}={}) {
+  const knownButtonTap=isKnownButtonInteraction(content)
+  if(fromMe&&!knownButtonTap)return false
+  if(type==='append'&&!knownButtonTap)return false
+  return type==='notify'||type==='append'
+}
+
 class ReplyRateLimiter {
   constructor({maxReplies=3,windowMs=5000,minMuteMs=5000,maxMuteMs=10000}={}) {
     this.maxReplies=maxReplies; this.windowMs=windowMs; this.minMuteMs=minMuteMs; this.maxMuteMs=maxMuteMs; this.users=new Map()
@@ -77,4 +84,4 @@ class ReplyRateLimiter {
     s.times.push(now);this.users.set(key,s);return {allowed:true}
   }
 }
-module.exports={isKnownButtonInteraction,isReplyTrigger,nativeFlowSelection,visibleText,ReplyRateLimiter}
+module.exports={isKnownButtonInteraction,isReplyTrigger,shouldHandleUpsert,nativeFlowSelection,visibleText,ReplyRateLimiter}
