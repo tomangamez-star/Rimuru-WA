@@ -58,13 +58,20 @@ async function archiveByKey (key) {
 }
 async function archiveByNameTier (name, tier) {
   const archiveId = String(process.env.TELEGRAM_CARD_ARCHIVE_CHAT_ID || '').trim()
-  const params = [`%${String(name).trim()}%`, Number(tier)]
+  const needle = String(name).trim().toLowerCase().replace(/\s+/g, ' ')
+  const params = [needle, Number(tier)]
   let archiveSql = ''
   if (archiveId) { params.push(archiveId); archiveSql = ' AND archive_chat_id::text=$3' }
   const q = await db().query(`SELECT source_url,name,normalized_name,series,tier,media_url,media_type,telegram_file_id,telegram_media_type,telegram_message_id,archive_chat_id
     FROM shoob_cards
-    WHERE (name ILIKE $1 OR normalized_name ILIKE $1) AND tier=$2${archiveSql}
-    ORDER BY CASE WHEN lower(name)=lower(replace($1,'%','')) THEN 0 ELSE 1 END, telegram_message_id DESC NULLS LAST
+    WHERE tier=$2${archiveSql}
+      AND (
+        lower(trim(name))=$1 OR lower(trim(COALESCE(normalized_name,'')))=$1
+        OR lower(name) ~ ('(^|[^a-z0-9])' || $1 || '([^a-z0-9]|$)')
+        OR lower(COALESCE(normalized_name,'')) ~ ('(^|[^a-z0-9])' || $1 || '([^a-z0-9]|$)')
+      )
+    ORDER BY CASE WHEN lower(trim(name))=$1 OR lower(trim(COALESCE(normalized_name,'')))=$1 THEN 0 ELSE 1 END,
+             telegram_message_id DESC NULLS LAST
     LIMIT 10`, params)
   return q.rows.map(normCard)
 }
@@ -120,6 +127,19 @@ async function collection (userId, limit = 20) {
 }
 async function ownedCard (key) { await ensureSchema(); return (await db().query('SELECT * FROM rimuru_wa_card_claims WHERE card_key=$1', [String(key)])).rows[0] || null }
 
+const searchSessions = new Map()
+function quotedStanzaId (content) {
+  return content?.extendedTextMessage?.contextInfo?.stanzaId ||
+    content?.imageMessage?.contextInfo?.stanzaId ||
+    content?.videoMessage?.contextInfo?.stanzaId || ''
+}
+function rememberSearch (messageId, jid, userId, cards) {
+  if (!messageId) return
+  searchSessions.set(messageId, { jid, userId, cards, expiresAt: Date.now() + 5 * 60 * 1000 })
+  const timer = setTimeout(() => searchSessions.delete(messageId), 5 * 60 * 1000 + 1000)
+  timer.unref?.()
+}
+
 function createCards ({ logger }) {
   const send = (s, j, m, t) => s.sendMessage(j, { text: t }, { quoted: m })
   async function handle (sock, m, content) {
@@ -128,6 +148,19 @@ function createCards ({ logger }) {
     const name = displayName(m) || 'Player'
     const raw = String(content.conversation || content.extendedTextMessage?.text || '').trim()
     if (!raw) return false
+    const replyId = quotedStanzaId(content)
+    if (/^\d{1,2}$/.test(raw) && replyId && searchSessions.has(replyId)) {
+      const session = searchSessions.get(replyId)
+      if (session.expiresAt <= Date.now()) { searchSessions.delete(replyId); await send(sock, jid, m, '⌛ That card search expired. Run */card <name> t<tier>* again.'); return true }
+      if (session.jid !== jid || session.userId !== id) return false
+      const pick = Number(raw) - 1
+      const card = session.cards[pick]
+      if (!card) { await send(sock, jid, m, `❌ Reply with a number from *1–${session.cards.length}*.`); return true }
+      searchSessions.delete(replyId)
+      const info = `🃏 *${card.name}*\n${tierStars(card.tier)} T${card.tier}\n🎬 ${card.series || 'Unknown Series'}`
+      try { await media.sendCardMedia(sock, jid, card, info, m) } catch (e) { logger.warn({ err: e, card: card.card_key }, 'card selection media failed'); await send(sock, jid, m, `⚠️ Card found, but archive media could not be fetched.\n\n${e.message}`) }
+      return true
+    }
     const claimMatch = raw.match(/^!claim\s+card\s+#?(\d{4,5})\s*$/i)
     if (claimMatch) {
       if (!(await registered(id))) { await send(sock, jid, m, '🌊 Use */start* first to register with Rimuru.'); return true }
@@ -157,17 +190,19 @@ function createCards ({ logger }) {
       const tierArg = args.find(x => /^t[1-6]$/i.test(x))
       const tier = tierArg ? Number(tierArg.slice(1)) : 0
       const searchName = args.filter(x => x !== tierArg).join(' ').trim()
-      if (!searchName || !tier) { await send(sock, jid, m, 'Use */card <character> t<tier>*\\nExample: */card Goku t5*'); return true }
+      if (!searchName || !tier) { await send(sock, jid, m, 'Use */card <character> t<tier>*\nExample: */card Goku t5*'); return true }
       const matches = await archiveByNameTier(searchName, tier)
       if (!matches.length) { await send(sock, jid, m, `❌ No *${searchName} T${tier}* card was found in the archive.`); return true }
       if (matches.length > 1) {
-        const list = matches.slice(0, 8).map((x, i) => `${i + 1}. *${x.name}* — ${x.series || 'Unknown'} • T${x.tier}`).join('\\n')
-        await send(sock, jid, m, `🔎 *${matches.length} MATCHES FOUND*\\n\\n${list}\\n\\nRefine the character name to narrow it down.`)
+        const shown = matches.slice(0, 8)
+        const list = shown.map((x, i) => `${i + 1}. *${x.name}* — ${x.series || 'Unknown'} • T${x.tier}`).join('\n')
+        const sent = await sock.sendMessage(jid, { text: `🔎 *${shown.length} MATCHES FOUND*\n\n${list}\n\n↩️ Reply to this message with *1–${shown.length}* to view a card.` }, { quoted: m })
+        rememberSearch(sent?.key?.id, jid, id, shown)
         return true
       }
       const card = matches[0]
-      const info = `🃏 *${card.name}*\\n${tierStars(card.tier)} T${card.tier}\\n🎬 ${card.series || 'Unknown Series'}`
-      try { await media.sendCardMedia(sock, jid, card, info, m) } catch (e) { logger.warn({ err: e, card: card.card_key }, 'card search media send failed'); await send(sock, jid, m, `⚠️ Card found, but archive media could not be fetched.\\n\\n${e.message}`) }
+      const info = `🃏 *${card.name}*\n${tierStars(card.tier)} T${card.tier}\n🎬 ${card.series || 'Unknown Series'}`
+      try { await media.sendCardMedia(sock, jid, card, info, m) } catch (e) { logger.warn({ err: e, card: card.card_key }, 'card search media send failed'); await send(sock, jid, m, `⚠️ Card found, but archive media could not be fetched.\n\n${e.message}`) }
       return true
     }
     if (cmd === '/cardinfo') {
@@ -175,7 +210,7 @@ function createCards ({ logger }) {
       if (!key) { await send(sock, jid, m, 'Use */cardinfo <archive card id>*.'); return true }
       const owned = await ownedCard(key), card = owned || await archiveByKey(key)
       if (!card) { await send(sock, jid, m, '❌ Card was not found in the shared archive catalogue.'); return true }
-      await send(sock, jid, m, `🃏 *${cardTitle({ ...card, card_key: key, name: card.card_name || card.name })}*\\n${tierStars(card.tier)} T${card.tier}\\n🎬 ${card.series || 'Unknown Series'}${owned ? '\\n👤 Owned: *Yes*' : '\\n👤 Owned: *No*'}`)
+      await send(sock, jid, m, `🃏 *${cardTitle({ ...card, card_key: key, name: card.card_name || card.name })}*\n${tierStars(card.tier)} T${card.tier}\n🎬 ${card.series || 'Unknown Series'}${owned ? '\n👤 Owned: *Yes*' : '\n👤 Owned: *No*'}`)
       return true
     }
     if (cmd === '/spawncard') {
