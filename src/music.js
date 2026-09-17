@@ -1,5 +1,7 @@
 'use strict'
 const fs=require('fs'),os=require('os'),path=require('path'),{spawn}=require('child_process')
+const localBin=path.join(process.cwd(),'.tools','bin')
+if(!String(process.env.PATH||'').split(path.delimiter).includes(localBin))process.env.PATH=`${localBin}${path.delimiter}${process.env.PATH||''}`
 const {database}=require('./auth-store'),{canonicalUserId}=require('./economy-router')
 const FAST_MB=Math.max(1,Number(process.env.MUSIC_FAST_DAILY_MB||100))
 const TOTAL_MB=Math.max(FAST_MB,Number(process.env.MUSIC_TOTAL_DAILY_MB||150))
