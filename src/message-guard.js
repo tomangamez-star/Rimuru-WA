@@ -5,11 +5,54 @@ const BUTTON_LABELS = new Set([
   '🎰 slots','🪙 coin flip','🎲 dice','🎡 roulette'
 ])
 
+const BUTTON_IDS = new Set([
+  'menu_main','menu_casino','menu_balance','menu_leaderboard','menu_games','menu_utilities','menu_help',
+  'casino_slots_help','casino_cf_help','casino_dice_help','casino_roulette_help',
+  'ryuden_enter','mines_a1','mines_b2','mines_cashout'
+])
+
+const REPLY_COMMANDS = new Set([
+  '/start','/menu','/help','/p','/profile','/balance','/bal','/bank','/leaderboard','/lb',
+  '/casino','/games','/utilities','/dep','/deposit','/wd','/withdraw','/donate','/transfer',
+  '/slots','/cf','/coinflip','/dice','/roulette','/ping','/test','/dbping','/image','/api','/mines'
+])
+
 function visibleText(content={}) {
-  return String(content.conversation || content.extendedTextMessage?.text || '').trim()
+  return String(
+    content.conversation ||
+    content.extendedTextMessage?.text ||
+    content.buttonsResponseMessage?.selectedDisplayText ||
+    content.templateButtonReplyMessage?.selectedDisplayText ||
+    content.listResponseMessage?.title ||
+    ''
+  ).trim()
 }
-function isKnownButtonText(content={}) {
-  return BUTTON_LABELS.has(visibleText(content).toLocaleLowerCase())
+
+function nativeFlowSelection(content={}) {
+  const raw=content.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson
+  if(!raw)return {id:'',text:''}
+  try {
+    const value=JSON.parse(raw)
+    return {
+      id:String(value.id||value.button_id||value.selected_id||''),
+      text:String(value.display_text||value.title||value.text||'')
+    }
+  } catch { return {id:'',text:''} }
+}
+
+function isKnownButtonInteraction(content={}) {
+  const text=visibleText(content).toLocaleLowerCase()
+  if(BUTTON_LABELS.has(text))return true
+  const listId=String(content.listResponseMessage?.singleSelectReply?.selectedRowId||'')
+  if(BUTTON_IDS.has(listId))return true
+  const selected=nativeFlowSelection(content)
+  return BUTTON_IDS.has(selected.id)||BUTTON_LABELS.has(selected.text.toLocaleLowerCase())
+}
+
+function isReplyTrigger(content={}) {
+  if(isKnownButtonInteraction(content))return true
+  const command=visibleText(content).toLocaleLowerCase().split(/\s+/)[0].split('@')[0]
+  return REPLY_COMMANDS.has(command)
 }
 
 class ReplyRateLimiter {
@@ -34,4 +77,4 @@ class ReplyRateLimiter {
     s.times.push(now);this.users.set(key,s);return {allowed:true}
   }
 }
-module.exports={isKnownButtonText,visibleText,ReplyRateLimiter}
+module.exports={isKnownButtonInteraction,isReplyTrigger,nativeFlowSelection,visibleText,ReplyRateLimiter}
