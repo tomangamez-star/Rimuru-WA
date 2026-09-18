@@ -3,6 +3,7 @@ const fs=require('fs'),os=require('os'),path=require('path')
 const {database}=require('./auth-store'),{canonicalUserId}=require('./economy-router')
 const TUBEGRAB=String(process.env.TUBEGRAB_URL||'https://tubegrab-87t1.onrender.com').replace(/\/$/,'')
 const TOTAL_MB=Math.max(1,Number(process.env.MUSIC_TOTAL_DAILY_MB||150))
+const FAST_MB=Math.min(TOTAL_MB,Math.max(1,Number(process.env.MUSIC_FAST_DAILY_MB||100)))
 const MAX_MINUTES=Math.max(1,Number(process.env.MUSIC_MAX_MINUTES||15))
 const POLL_MS=Math.max(1500,Number(process.env.MUSIC_WORKER_POLL_MS||3000))
 const POLL_TIMEOUT_MS=Math.max(60000,Number(process.env.MUSIC_WORKER_TIMEOUT_MS||30*60*1000))
@@ -32,8 +33,8 @@ function createMusic({logger}){
  async function processJob(job){const{sock,m,jid,query}=job;let dir
   try{
    const before=await usage(),hard=TOTAL_MB*1048576
-   if(before.bytes>=hard){await send(sock,jid,m,`🛑 *RIMURU MUSIC LIMIT REACHED*\n\nToday's allowance is finished (${mb(before.bytes)} MB / ${TOTAL_MB} MB).`);return}
-   await send(sock,jid,m,`🎧 *RIMURU MUSIC*\n🔎 Searching for *${query}*…`)
+   if(before.bytes>=hard){await send(sock,jid,m,`🛑 *LILY MUSIC LIMIT REACHED*\n\nToday's allowance is finished (${mb(before.bytes)} MB / ${TOTAL_MB} MB).`);return}
+   await send(sock,jid,m,`🎧 *LILY MUSIC*\n🔎 Searching for *${query}*…${before.bytes>=FAST_MB*1048576?`\n🐢 Conservation range active: ${FAST_MB}–${TOTAL_MB} MB.`:''}`)
    const song=await resolveSong(query)
    if(Number(song.duration||0)>MAX_MINUTES*60){await send(sock,jid,m,`⏱️ That result is longer than the *${MAX_MINUTES} minute* /play limit.`);return}
    await resultCard(sock,jid,m,song)
@@ -42,10 +43,10 @@ function createMusic({logger}){
    dir=fs.mkdtempSync(path.join(os.tmpdir(),'rimuru-music-'))
    const media=await downloadFile(done.id,dir),fresh=await usage(),projected=media.size
    if(fresh.bytes+projected>hard){await send(sock,jid,m,`🛑 The ${mb(media.size)} MB file would exceed today's ${TOTAL_MB} MB allowance.`);return}
-   const title=clean(done.title||song.title||'Rimuru Music')
+   const title=clean(done.title||song.title||'Lily Music')
    await sock.sendMessage(jid,{audio:{url:media.file},mimetype:media.mime,fileName:`${title}${path.extname(media.file)}`,ptt:false},{quoted:m})
    await charge(projected)
-  }catch(e){logger.warn({err:e},'Rimuru /play failed');await send(sock,jid,m,`❌ I couldn't download that song.\n${String(e.message||e).slice(0,500)}`)}
+  }catch(e){logger.warn({err:e},'Lily /play failed');await send(sock,jid,m,`❌ I couldn't download that song.\n${String(e.message||e).slice(0,500)}`)}
   finally{if(dir)fs.rmSync(dir,{recursive:true,force:true})}
  }
  async function pump(){if(working)return;working=true;try{while(queue.length)await processJob(queue.shift())}finally{working=false}}

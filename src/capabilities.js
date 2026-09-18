@@ -1,0 +1,5 @@
+'use strict'
+const COMMANDS=['/start','/menu','/help','/p','/balance','/bank','/deposit','/withdraw','/daily','/casino','/slots','/cf','/dice','/roulette','/rpg','/masters','/master','/train','/techniques','/shop','/story','/missions','/npc <message>','/explore','/inventory','/guild','/combat','/duel @player','/duels','/cards','/collection','/cardinfo','/play','/ai','/talk','/endtalk','/zone','/zones']
+const RULES=['There is no /exit command and no End RPG button.','Casino only works in the Casino zone.','Standalone Combat only works in the Combat zone.','Duels only work in the Duels zone.','Story, Story combat, Shop and Cards work in the Normal zone.','Odyssey city activities work in the RPG zone.','NPC conversation requires /npc <message>.','Card Battle and Hybrid Duels are planned but are not available yet.']
+function prompt(){return `REAL CAPABILITY REGISTRY\nCommands: ${COMMANDS.join(', ')}.\nRules: ${RULES.join(' ')}\nNever name any command, button, price, mechanic or feature outside this registry. If uncertain, say you do not know and suggest /menu or /help.`}
+module.exports={COMMANDS,RULES,prompt}
