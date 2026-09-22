@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node -r ./src/bootstrap-upgrade.js src/server.js",
-    "check": "node --check src/server.js && node --check src/auth-store.js && node --check src/telegram-control.js && node --check src/economy-router.js && node --check src/ai-memory.js && node --check src/ai-v2.js && node --check src/rpg-upgrade.js && node --check src/ui-upgrade.js && node --check src/music.js && node --check src/zone-router.js && node --check src/cursed-sticker.js"
+    "check": "node --check src/server.js && node --check src/auth-store.js && node --check src/telegram-control.js && node --check src/economy-router.js && node --check src/identity.js && node --check src/ai-memory.js && node --check src/ai-v2.js && node --check src/rpg-upgrade.js && node --check src/ui-upgrade.js && node --check src/music.js && node --check src/zone-router.js && node --check src/cursed-sticker.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc14",
