@@ -31,5 +31,33 @@ test('provider retry parsing and silent incident errors are deterministic',()=>{
  const response={headers:{get:name=>name==='retry-after'?'12':null}}
  assert.equal(ai._test.retryMs(response,429),12000)
  assert.equal(ai._test.retryMs({headers:{get:()=>null}},429),60000)
+ assert.equal(ai._test.retryHintMs('Please try again in 3m4.464s.'),185464)
  assert.equal(ai._test.silentError().code,'LILY_SILENT')
+})
+
+test('Lily has independent Groq model quotas available',()=>{
+ assert.deepEqual(ai.modelCandidates(),[
+  'openai/gpt-oss-20b',
+  'openai/gpt-oss-120b',
+  'meta-llama/llama-4-scout-17b-16e-instruct',
+  'llama-3.3-70b-versatile',
+  'llama-3.1-8b-instant'
+ ])
+})
+
+test('a model-specific 429 switches to the next Groq model',async()=>{
+ const originalFetch=global.fetch,originalKey=process.env.GROQ_API_KEY,calls=[]
+ process.env.GROQ_API_KEY='test-key'
+ global.fetch=async(_url,options)=>{
+  const model=JSON.parse(options.body).model;calls.push(model)
+  if(calls.length===1)return{ok:false,status:429,headers:{get:()=>null},text:async()=>'{"error":{"message":"Please try again in 3m4.464s."}}'}
+  return{ok:true,json:async()=>({choices:[{message:{content:'Still here.'}}]})}
+ }
+ try{
+  assert.equal(await ai._test.call([{role:'user',content:'hi'}]),'Still here.')
+  assert.deepEqual(calls,['openai/gpt-oss-20b','openai/gpt-oss-120b'])
+ }finally{
+  global.fetch=originalFetch
+  if(originalKey===undefined)delete process.env.GROQ_API_KEY;else process.env.GROQ_API_KEY=originalKey
+ }
 })
