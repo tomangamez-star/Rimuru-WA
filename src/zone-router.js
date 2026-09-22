@@ -5,8 +5,8 @@ const LABEL={normal:'🌊 Ryuden',casino:'⌬ AXYN VAULT 🪙 {casino}',combat:'
 const inviteCache=new Map(),INVITE_TTL_MS=5*60*1000
 const COMMAND_ZONE=new Map([
  ['/casino','casino'],['/slots','casino'],['/cf','casino'],['/coinflip','casino'],['/dice','casino'],['/roulette','casino'],
- ['/combat','combat'],['/fight','combat'],['/duel','duels'],['/duels','duels'],['/challenge','duels'],
- ['/story','normal'],['/shop','normal'],['/cards','normal'],['/collection','normal'],['/card','normal'],['/cardinfo','normal'],['/spawncard','normal'],['/missions','normal'],['/mission','normal'],
+ ['/combat','combat'],['/fight','combat'],['/duel','duels'],['/duels','duels'],['/challenge','duels'],['/cardbattle','duels'],['/hybridbattle','duels'],
+ ['/story','normal'],['/shop','normal'],['/cards','normal'],['/collection','normal'],['/card','normal'],['/cardinfo','normal'],['/cardstats','normal'],['/deck','normal'],['/spawncard','normal'],['/missions','normal'],['/mission','normal'],
  ['/explore','rpg'],['/masters','rpg'],['/master','rpg'],['/train','rpg'],['/guild','rpg'],['/daily','rpg'],['/inventory','rpg'],['/npc','rpg']
 ])
 function db(){const d=database();if(!d)throw Error('DATABASE_URL is required for zones');return d}

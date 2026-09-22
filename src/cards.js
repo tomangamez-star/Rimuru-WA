@@ -1,9 +1,10 @@
 'use strict'
 
 const { database } = require('./auth-store')
-const { canonicalUserId, displayName, isModerator } = require('./economy-router')
+const { canonicalUserId, quotedUserId, displayName, isModerator } = require('./economy-router')
 const { isOwner } = require('./access')
 const media = require('./card-media')
+const power = require('./card-power')
 
 function db () { const d = database(); if (!d) throw new Error('DATABASE_URL is required for Cards'); return d }
 function cardKeyFromRow (r) {
@@ -45,6 +46,7 @@ async function ensureSchema () {
     ALTER TABLE rimuru_wa_card_spawns ADD COLUMN IF NOT EXISTS claim_code TEXT;
     CREATE INDEX IF NOT EXISTS rimuru_wa_card_spawns_claim_code_idx ON rimuru_wa_card_spawns(claim_code);
   `)
+  await power.ensureSchema()
   ready = true
 }
 async function registered (id) { return !!(await db().query('SELECT 1 FROM rimuru_wa_users WHERE user_id=$1', [id])).rowCount }
@@ -133,6 +135,11 @@ function quotedStanzaId (content) {
     content?.imageMessage?.contextInfo?.stanzaId ||
     content?.videoMessage?.contextInfo?.stanzaId || ''
 }
+function mentionedUserId (content) {
+  const contexts = [content?.extendedTextMessage?.contextInfo, content?.imageMessage?.contextInfo, content?.videoMessage?.contextInfo]
+  const jid = contexts.flatMap(x => x?.mentionedJid || [])[0]
+  return jid ? String(jid).split(':')[0].split('@')[0] : null
+}
 function rememberSearch (messageId, jid, userId, cards) {
   if (!messageId) return
   searchSessions.set(messageId, { jid, userId, cards, expiresAt: Date.now() + 5 * 60 * 1000 })
@@ -171,12 +178,58 @@ function createCards ({ logger }) {
     }
     if (!raw.startsWith('/')) return false
     const parts = raw.split(/\s+/), cmd = parts.shift().toLowerCase().split('@')[0], args = parts
-    if (!['/cards','/collection','/card','/cardinfo','/spawncard'].includes(cmd)) return false
+    if (!['/cards','/collection','/card','/cardinfo','/spawncard','/grant','/grantcard','/cardstats','/deck','/rerollcardstats','/setcardstats'].includes(cmd)) return false
     if (!(await registered(id))) { await send(sock, jid, m, '🌊 Use */start* first to register with Rimuru.'); return true }
     await ensureSchema()
+    if (cmd === '/grant' || cmd === '/grantcard') {
+      if (!isOwner(id)) { await send(sock, jid, m, '⛔ *ORIGINAL OWNER ONLY*'); return true }
+      if (cmd === '/grant' && String(args[0] || '').toLowerCase() !== 'card') return false
+      const grantArgs = cmd === '/grant' ? args.slice(1) : args.slice()
+      const tierArg = grantArgs.find(x => /^t[1-6]$/i.test(x))
+      const tier = tierArg ? Number(tierArg.slice(1)) : 0
+      const target = quotedUserId(content) || mentionedUserId(content) || id
+      const searchName = grantArgs.filter(x => x !== tierArg && !/^@\d+$/.test(x)).join(' ').trim()
+      if (!searchName || !tier) { await send(sock, jid, m, 'Use */grant card <character name> t1-t6*\nReply to or mention a registered player to grant it to them.'); return true }
+      if (!(await registered(target))) { await send(sock, jid, m, '🌊 That player must use */start* before receiving cards.'); return true }
+      const matches = await archiveByNameTier(searchName, tier)
+      let card = null
+      for (const candidate of matches) if (!(await ownedCard(candidate.card_key))) { card = candidate; break }
+      if (!card) { await send(sock, jid, m, matches.length ? `💨 Every matching *${searchName} T${tier}* archive instance is already owned.` : `❌ No *${searchName} T${tier}* card was found.`); return true }
+      await db().query(`INSERT INTO rimuru_wa_card_claims(card_key,user_id,card_name,series,tier,source_url,telegram_file_id,telegram_media_type,claimed_group_jid,acquisition_source,granted_by)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'owner_grant',$10)`, [card.card_key, target, card.name || '', card.series || '', Number(card.tier) || tier, card.source_url || '', card.telegram_file_id || '', card.telegram_media_type || 'photo', jid, id])
+      await send(sock, jid, m, `🎁 *CARD GRANTED*\n\n🃏 *${card.name}* — T${card.tier}\n🆔 #${card.card_key}\n👤 +${target}\n\nIts combat profile will be generated and permanently saved on first use.`)
+      return true
+    }
+    if (cmd === '/deck') {
+      const keys = args.map(x => String(x).replace(/^#/, '')).filter(Boolean)
+      if (!keys.length) {
+        const current = await power.deck(id, 3, { logger })
+        await send(sock, jid, m, `🃏 *CARD BATTLE DECK*\n\n${current.length ? current.map((x, i) => `${i + 1}. *${x.name}* — T${x.tier} • ⚡ ${x.power}`).join('\n') : 'No owned cards yet.'}\n\nSet it with */deck #id #id #id*.`)
+        return true
+      }
+      const result = await power.setDeck(id, keys)
+      await send(sock, jid, m, result.ok ? `✅ *DECK SAVED*\n\n${result.keys.map((x, i) => `${i + 1}. #${x}`).join('\n')}\n\nUnused slots automatically use your strongest owned cards.` : `❌ ${result.message}`)
+      return true
+    }
+    if (cmd === '/cardstats' || cmd === '/rerollcardstats' || cmd === '/setcardstats') {
+      const key = String(args[0] || '').replace(/^#/, '')
+      const card = key ? await ownedCard(key) : null
+      if (!card) { await send(sock, jid, m, 'Use */cardstats #owned-card-id*.'); return true }
+      if (cmd !== '/cardstats' && !(isOwner(id) || await isModerator(id))) { await send(sock, jid, m, '🛡️ Only Lily moderators can change a saved combat profile.'); return true }
+      if (cmd === '/setcardstats') {
+        const nums = args.slice(1, 6).map(Number)
+        if (nums.length !== 5 || nums.some(x => !Number.isFinite(x))) { await send(sock, jid, m, 'Use */setcardstats #id <base power> <attack> <defense> <speed> <technique>*.'); return true }
+        const profile = power.validateProfile({ base_power: nums[0], attack: nums[1], defense: nums[2], speed: nums[3], technique: nums[4], role: 'Custom Fighter', energy_type: 'Custom', passive: 'Owner Tuned', signature: 'Owner Tuned', confidence: 1 }, card)
+        await power.saveProfile(card, profile, 'owner_override', { set_by: id })
+      }
+      const profile = await power.getProfile(card, { force: cmd === '/rerollcardstats', logger })
+      const stat = power.effectiveStats(card, profile)
+      await send(sock, jid, m, `⚔️ *CARD COMBAT PROFILE*\n\n🃏 *${stat.name}* — T${stat.tier}\n🎬 ${stat.series || 'Unknown Series'}\n⚡ Power: *${stat.power}* (base ${profile.base_power})\n❤️ HP: *${stat.hp}*\n🗡️ Attack: *${stat.attack}*\n🛡️ Defense: *${stat.defense}*\n💨 Speed: *${stat.speed}*\n🎯 Technique: *${stat.technique}*\n\n✨ ${stat.passive}\n💥 ${stat.signature}\n_Rating: ${profile.source}; saved permanently._`)
+      return true
+    }
     if (cmd === '/cards') {
       const c = await collection(id, 5)
-      await send(sock, jid, m, `🃏 *RIMURU CARDS*\n\n🎴 Owned: *${c.total}*\n\n*/collection* — your cards\n*/cardinfo <id>* — card details\n*/card <id>* — open artwork\n\nGroup claims use *!claim card <id>*.`)
+      await send(sock, jid, m, `🃏 *RIMURU CARDS*\n\n🎴 Owned: *${c.total}*\n\n*/collection* — your cards\n*/cardinfo <id>* — card details\n*/cardstats <id>* — combat rating\n*/deck #id #id #id* — battle team\n*/card <name> t<tier>* — moderator archive search\n\nGroup claims use *!claim card <id>*.`)
       return true
     }
     if (cmd === '/collection') {
