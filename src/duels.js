@@ -4,16 +4,19 @@ const crypto = require('crypto')
 const { database } = require('./auth-store')
 const { canonicalUserId, displayName } = require('./economy-router')
 const cardPower = require('./card-power')
+const rpgStore = require('./rpg-store')
 const AI_ID = 'ai:lily'
 let ready = false
 function db () { const d = database(); if (!d) throw Error('DATABASE_URL is required for Duels'); return d }
 function actor (m) { return canonicalUserId(m.key) }
-function label (p, fallback) { return String(p?.display_name || p?.name || fallback || 'Fighter').slice(0, 40) }
-function mentioned (content) { const x = content.extendedTextMessage?.contextInfo || content.imageMessage?.contextInfo || {}; const j = (x.mentionedJid || [])[0] || x.participantAlt || x.participant; return j ? String(j).split(':')[0].split('@')[0] : null }
+function label (p, fallback) { return String(p?.display_name || p?.displayName || p?.username || p?.name || fallback || 'Fighter').slice(0, 40) }
+function mentioned (content) { const x = content.extendedTextMessage?.contextInfo || content.imageMessage?.contextInfo || {}; return (x.mentionedJid || [])[0] || x.participantAlt || x.participant || null }
+function bare (jid) { return String(jid || '').split(':')[0].split('@')[0] }
 function uid () { return crypto.randomUUID().replace(/-/g, '').slice(0, 12) }
 function random (min, max) { return min + Math.floor(Math.random() * (max - min + 1)) }
 async function ensureSchema () { if (ready) return; await db().query(`CREATE TABLE IF NOT EXISTS rimuru_wa_duels(duel_id TEXT PRIMARY KEY,chat_jid TEXT NOT NULL,challenger_id TEXT NOT NULL,opponent_id TEXT NOT NULL,duel_type TEXT NOT NULL DEFAULT 'battle',status TEXT NOT NULL DEFAULT 'pending',combat_state JSONB NOT NULL DEFAULT '{}'::jsonb,winner_id TEXT,expires_at TIMESTAMPTZ NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()); CREATE INDEX IF NOT EXISTS rimuru_wa_duels_chat_status ON rimuru_wa_duels(chat_jid,status);`); await cardPower.ensureSchema(); ready = true }
-async function player (id) { return (await db().query('SELECT * FROM rimuru_rpg_players WHERE user_id=$1', [id])).rows[0] || null }
+async function player (id, suggestedName = '') { const user = (await db().query('SELECT user_id,display_name FROM rimuru_wa_users WHERE user_id=$1', [id])).rows[0]; if (!user) return null; const p = await rpgStore.ensurePlayer(id, suggestedName || user.display_name || ''); return { ...p, display_name: suggestedName || user.display_name || p.username || '' } }
+async function resolveOpponent (sock, jid, reference) { if (!reference) return null; const wanted = bare(reference), candidates = new Map([[wanted, '']]); try { const meta = await sock.groupMetadata(jid); for (const p of meta.participants || []) { const ids = [p.id, p.lid, p.phoneNumber].filter(Boolean); if (ids.some(x => bare(x) === wanted)) for (const x of ids) candidates.set(bare(x), p.notify || p.name || p.verifiedName || '') } } catch {} const ids = [...candidates.keys()]; const found = (await db().query('SELECT user_id,display_name FROM rimuru_wa_users WHERE user_id=ANY($1::text[]) ORDER BY CASE WHEN user_id=$2 THEN 0 ELSE 1 END LIMIT 1', [ids, wanted])).rows[0]; return found ? { id: found.user_id, name: found.display_name || candidates.get(found.user_id) || '' } : { id: wanted, name: candidates.get(wanted) || '' } }
 async function row (id) { await ensureSchema(); return (await db().query('SELECT * FROM rimuru_wa_duels WHERE duel_id=$1', [id])).rows[0] || null }
 async function saveState (id, state, status = 'active') { await db().query('UPDATE rimuru_wa_duels SET combat_state=$2::jsonb,status=$3,updated_at=NOW() WHERE duel_id=$1', [id, JSON.stringify(state), status]) }
 function rpgUnit (p, id) { const hp = Math.max(100, Number(p.hp) || Number(p.max_hp) || 120); return { kind: 'rpg', key: `rpg:${id}`, name: label(p, id), hp, maxHp: hp, attack: Math.max(20, Number(p.atk) || 25), defense: Math.max(10, Number(p.def) || 12), speed: Math.max(25, Number(p.speed) || 45), technique: Math.max(25, Number(p.technique) || 45), signature: 'Odyssey Art' } }
@@ -29,22 +32,24 @@ function actionButtons (id) { return [['⚔️ Attack', `duel_attack_${id}`], ['
 function createDuels ({ sendButtons, logger }) {
   const send = (s, j, m, t) => s.sendMessage(j, { text: t }, { quoted: m })
   const buttons = (s, j, m, b, f, d, o) => sendButtons(s, j, b, f, d, o)
-  async function beginSelection (s, m, opponentId, forcedType = '') {
-    const jid = m.key.remoteJid, challenger = actor(m), p = await player(challenger)
+  async function beginSelection (s, m, opponentRef, forcedType = '') {
+    const jid = m.key.remoteJid, challenger = actor(m), p = await player(challenger, displayName(m)), resolved = opponentRef === AI_ID ? { id: AI_ID, name: 'Lily' } : await resolveOpponent(s, jid, opponentRef), opponentId = resolved?.id
     if (!jid.endsWith('@g.us')) { await send(s, jid, m, '🥊 Duels must begin inside the Duels group.'); return true }
     if (!p) { await send(s, jid, m, '🌊 Use */start* and create your Odyssey profile first.'); return true }
-    if (opponentId !== AI_ID) { if (!opponentId) { await send(s, jid, m, 'Reply to or @mention a player with */duel @player*, or use */duel ai*.'); return true } if (opponentId === challenger) { await send(s, jid, m, '😭 You cannot duel yourself. Try */duel ai*.'); return true } if (!(await player(opponentId))) { await send(s, jid, m, '🌊 That fighter needs an Odyssey profile first.'); return true } }
+    if (opponentId !== AI_ID) { if (!opponentId) { await send(s, jid, m, 'Reply to or @mention a player with */duel @player*, or use */duel ai*.'); return true } if (opponentId === challenger) { await send(s, jid, m, '😭 You cannot duel yourself. Try */duel ai*.'); return true } if (!(await player(opponentId, resolved.name))) { await send(s, jid, m, '🌊 That fighter has not registered yet. Ask them to use */start*.'); return true } }
     await ensureSchema(); await db().query("UPDATE rimuru_wa_duels SET status='expired',updated_at=NOW() WHERE status IN ('selecting','pending') AND expires_at<NOW()")
     const id = uid(); await db().query("INSERT INTO rimuru_wa_duels(duel_id,chat_jid,challenger_id,opponent_id,duel_type,status,expires_at) VALUES($1,$2,$3,$4,'select','selecting',NOW()+INTERVAL '5 minutes')", [id, jid, challenger, opponentId])
     if (forcedType) return selectMode(s, m, forcedType, id)
-    await buttons(s, jid, m, `⚔️ *CHOOSE DUEL STYLE*\n\nChallenger: *${label(p, displayName(m))}*\nOpponent: *${opponentId === AI_ID ? 'Lily-controlled AI' : `+${opponentId}`}*\n\n🥊 Battle — Odyssey characters\n🃏 Card Battle — up to 3 owned cards\n🔥 Hybrid — character + up to 2 cards`, 'LILY • RYUDEN DUELS', [['🥊 Battle', `duel_mode_battle_${id}`], ['🃏 Card Battle', `duel_mode_card_${id}`], ['🔥 Hybrid', `duel_mode_hybrid_${id}`]], challenger); return true
+    const opponent = opponentId === AI_ID ? 'Lily-controlled AI' : label(await player(opponentId, resolved.name), 'Opponent')
+    await buttons(s, jid, m, `⚔️ *CHOOSE DUEL STYLE*\n\nChallenger: *${label(p, displayName(m))}*\nOpponent: *${opponent}*\n\n🥊 Battle — Odyssey characters\n🃏 Card Battle — up to 3 owned cards\n🔥 Hybrid — character + up to 2 cards`, 'LILY • RYUDEN DUELS', [['🥊 Battle', `duel_mode_battle_${id}`], ['🃏 Card Battle', `duel_mode_card_${id}`], ['🔥 Hybrid', `duel_mode_hybrid_${id}`]], challenger); return true
   }
   async function selectMode (s, m, type, id) {
     const d = await row(id), u = actor(m); if (!d || d.status !== 'selecting' || new Date(d.expires_at) < new Date()) { await send(s, m.key.remoteJid, m, '⌛ That duel setup expired.'); return true } if (u !== d.challenger_id) { await send(s, d.chat_jid, m, '🔒 Only the challenger can choose the duel style.'); return true }
     try { await teamFor(d.challenger_id, type, logger) } catch (e) { await send(s, d.chat_jid, m, `❌ ${e.message}`); return true }
     await db().query('UPDATE rimuru_wa_duels SET duel_type=$2,status=$3,updated_at=NOW() WHERE duel_id=$1', [id, type, d.opponent_id === AI_ID ? 'starting' : 'pending'])
     if (d.opponent_id === AI_ID) return startFight(s, m, { ...d, duel_type: type, status: 'starting' })
-    await buttons(s, d.chat_jid, m, `⚔️ *DUEL CHALLENGE*\n\n+${d.challenger_id} challenged +${d.opponent_id}.\n\nMode: *${modeName(type)}*\nExpires in: *5 minutes*`, 'LILY • RYUDEN DUELS', [['✅ Accept', `duel_accept_${id}`], ['❌ Decline', `duel_decline_${id}`]], d.opponent_id); return true
+    const [challenger, opponent] = await Promise.all([player(d.challenger_id), player(d.opponent_id)])
+    await buttons(s, d.chat_jid, m, `⚔️ *DUEL CHALLENGE*\n\n*${label(challenger, 'Challenger')}* challenged *${label(opponent, 'Opponent')}*.\n\nMode: *${modeName(type)}*\nExpires in: *5 minutes*`, 'LILY • RYUDEN DUELS', [['✅ Accept', `duel_accept_${id}`], ['❌ Decline', `duel_decline_${id}`]], d.opponent_id); return true
   }
   async function decline (s, m, id) { const d = await row(id), u = actor(m); if (!d || d.status !== 'pending') { await send(s, m.key.remoteJid, m, '⌛ This challenge is no longer active.'); return true } if (u !== d.opponent_id) { await send(s, d.chat_jid, m, '🔒 Only the challenged player can decline.'); return true } await db().query("UPDATE rimuru_wa_duels SET status='declined',updated_at=NOW() WHERE duel_id=$1", [id]); await send(s, d.chat_jid, m, '❌ *DUEL DECLINED*\n\nThe challenge was refused.'); return true }
   async function accept (s, m, id) { const d = await row(id), u = actor(m); if (!d || d.status !== 'pending' || new Date(d.expires_at) < new Date()) { await send(s, m.key.remoteJid, m, '⌛ This challenge expired.'); return true } if (u !== d.opponent_id) { await send(s, d.chat_jid, m, '🔒 Only the challenged player can accept.'); return true } return startFight(s, m, d) }
@@ -61,4 +66,4 @@ function createDuels ({ sendButtons, logger }) {
   async function section (s, m, id) { let x = id.match(/^duel_mode_(battle|card|hybrid)_([a-z0-9]+)$/); if (x) return selectMode(s, m, x[1], x[2]); x = id.match(/^duel_(accept|decline|attack|special|guard|forfeit)_([a-z0-9]+)$/); if (!x) return false; if (x[1] === 'accept') return accept(s, m, x[2]); if (x[1] === 'decline') return decline(s, m, x[2]); return action(s, m, x[1], x[2]) }
   return { route, section, ensureSchema }
 }
-module.exports = { createDuels, ensureSchema, _test: { rpgUnit, cardUnit, aiEcho, modeName } }
+module.exports = { createDuels, ensureSchema, _test: { rpgUnit, cardUnit, aiEcho, modeName, label, bare } }
