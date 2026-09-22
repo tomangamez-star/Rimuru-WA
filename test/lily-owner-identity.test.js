@@ -26,3 +26,10 @@ test('Lily refuses factual lookup and serious advice instead of answering',()=>{
   assert.doesNotMatch(answer,/SpaceX|Tesla|freelance|consulting|four|\b4\b/i)
  }
 })
+
+test('provider retry parsing and silent incident errors are deterministic',()=>{
+ const response={headers:{get:name=>name==='retry-after'?'12':null}}
+ assert.equal(ai._test.retryMs(response,429),12000)
+ assert.equal(ai._test.retryMs({headers:{get:()=>null}},429),60000)
+ assert.equal(ai._test.silentError().code,'LILY_SILENT')
+})
