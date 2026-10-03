@@ -1,12 +1,12 @@
 # Rimuru WhatsApp Bot — Website Controlled
 
-Lily is controlled from the private owner dashboard at `/dashboard`.
+The primary Lily account and secondary Boy Alone auto-reply account share one secure website at `/dashboard`. The password determines which isolated control room opens.
 
 ## Commands
 
 Owner website:
 
-- Pair or replace the WhatsApp account with a phone-number code.
+- Pair multiple WhatsApp accounts with phone-number codes.
 - View connection, storage, provider and memory status.
 - Reconnect, pause/resume, inspect incidents, and take control from a stale deployment.
 
@@ -20,8 +20,10 @@ WhatsApp:
 ## Required environment variables
 
 - `DASHBOARD_PASSWORD` — strong private password for `/dashboard`.
+- `BOY_ALONE_PASSWORD` — separate password for the limited Boy Alone dashboard. Never reuse the owner password.
 - `DATABASE_URL` — Supabase Postgres connection string; use the pooler URL.
 - `WA_SESSION_ID` — optional; defaults to `rimuru-wa-test`.
+- `WA_MAX_SESSIONS` — optional maximum paired accounts; defaults to `5`.
 
 ## Deploy
 
@@ -45,7 +47,9 @@ npm start
 After deployment, open `https://YOUR-SERVICE.onrender.com/dashboard`, sign in,
 and use **Take control** if the instance is in standby. Use the Accounts page
 to generate a pairing code, then enter it in WhatsApp's **Linked devices → Link
-with phone number** screen.
+with phone number** screen. The primary saved session remains Lily. New secondary
+sessions default to Boy Alone mode. Signing in with `BOY_ALONE_PASSWORD` exposes
+only Boy Alone's personality, cooldown, reply state, muted chats and scoped memory.
 
 ## Reading the result
 

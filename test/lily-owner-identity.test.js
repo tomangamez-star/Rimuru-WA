@@ -27,6 +27,15 @@ test('Lily refuses factual lookup and serious advice instead of answering',()=>{
  }
 })
 
+test('Boy Alone has an isolated short conversational persona',()=>{
+ const prompt=ai._test.sys({mode:'autoreply',personaName:'Boy Alone',personaPrompt:'Cool and calm.',memories:['Likes football']})
+ assert.match(prompt,/You are Boy Alone/)
+ assert.match(prompt,/ongoing conversation|full conversation context/i)
+ assert.match(prompt,/one sentence/i)
+ assert.match(prompt,/Likes football/)
+ assert.doesNotMatch(prompt,/Rimuru|Ryuden|Toman/)
+})
+
 test('provider retry parsing and silent incident errors are deterministic',()=>{
  const response={headers:{get:name=>name==='retry-after'?'12':null}}
  assert.equal(ai._test.retryMs(response,429),12000)
