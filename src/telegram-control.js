@@ -6,7 +6,10 @@ function createTelegramControl ({ connection, logger }) {
   let stopped = false
   let offset = 0
 
-  if (!token || !ownerId) throw new Error('TELEGRAM_BOT_TOKEN and TELEGRAM_OWNER_ID are required')
+  if (!token || !ownerId) {
+    logger.warn('Telegram controller disabled: TELEGRAM_BOT_TOKEN or TELEGRAM_OWNER_ID is missing')
+    return { start: async () => {}, stop: () => { stopped = true } }
+  }
   const api = `https://api.telegram.org/bot${token}`
 
   async function call (method, body) {
@@ -82,16 +85,29 @@ function createTelegramControl ({ connection, logger }) {
     }
   }
 
+  async function run () {
+    while (!stopped) {
+      try {
+        await call('deleteWebhook', { drop_pending_updates: true })
+        await call('setMyCommands', { commands: [
+          { command: 'pair', description: 'Pair a WhatsApp number' },
+          { command: 'status', description: 'Show WhatsApp connection state' },
+          { command: 'reconnect', description: 'Reconnect WhatsApp' },
+          { command: 'ping', description: 'Test Telegram controller' }
+        ] })
+        logger.info('Telegram controller connected')
+        await poll()
+        return
+      } catch (error) {
+        logger.warn({ err: error }, 'Telegram startup unavailable; WhatsApp and dashboard remain online')
+        await new Promise((resolve) => setTimeout(resolve, 5000))
+      }
+    }
+  }
+
   return {
     start: async () => {
-      await call('deleteWebhook', { drop_pending_updates: true })
-      await call('setMyCommands', { commands: [
-        { command: 'pair', description: 'Pair a WhatsApp number' },
-        { command: 'status', description: 'Show WhatsApp connection state' },
-        { command: 'reconnect', description: 'Reconnect WhatsApp' },
-        { command: 'ping', description: 'Test Telegram controller' }
-      ] })
-      void poll()
+      void run()
     },
     stop: () => { stopped = true }
   }
