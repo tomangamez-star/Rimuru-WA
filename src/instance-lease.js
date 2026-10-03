@@ -2,7 +2,7 @@
 
 const crypto = require('crypto')
 
-function createInstanceLease ({ database, logger, key = process.env.WA_SESSION_ID || 'rimuru-wa-test', ttlMs = 45000, retryMs = 5000, heartbeatMs = 10000 }) {
+function createInstanceLease ({ database, logger, key = process.env.WA_SESSION_ID || 'rimuru-wa-test', ttlMs = 45000, retryMs = 5000, heartbeatMs = 10000, takeoverGraceMs = 12000 }) {
   const holder = `${process.env.RENDER_INSTANCE_ID || process.env.HOSTNAME || 'local'}:${process.pid}:${crypto.randomUUID()}`
   let owned = false
   let stopped = false
@@ -10,6 +10,7 @@ function createInstanceLease ({ database, logger, key = process.env.WA_SESSION_I
   let heartbeatBusy = false
   let heartbeatFailures = 0
   let onLost = null
+  let forced = false
 
   async function ensureSchema (db) {
     await db.query(`CREATE TABLE IF NOT EXISTS rimuru_instance_leases (
@@ -76,6 +77,10 @@ function createInstanceLease ({ database, logger, key = process.env.WA_SESSION_I
           timer = setInterval(() => void heartbeat(db), heartbeatMs)
           timer.unref?.()
           logger.info({ leaseKey: key, holder }, 'Lily instance lease acquired')
+          if (forced) {
+            logger.warn({ leaseKey: key }, 'Forced takeover claimed; allowing the previous process time to stop')
+            await new Promise(resolve => setTimeout(resolve, takeoverGraceMs))
+          }
           return true
         }
         if (!announced) {
@@ -100,7 +105,19 @@ function createInstanceLease ({ database, logger, key = process.env.WA_SESSION_I
     if (db) await db.query('DELETE FROM rimuru_instance_leases WHERE lease_key=$1 AND holder_id=$2', [key, holder]).catch(error => logger.warn({ err: error }, 'Lily lease release failed'))
   }
 
-  return { acquire, release, status: () => ({ owned, role: owned ? 'active' : 'standby' }) }
+  async function forceTakeover () {
+    const db = database()
+    if (!db) throw new Error('DATABASE_URL is required for instance takeover')
+    await ensureSchema(db)
+    await db.query(`INSERT INTO rimuru_instance_leases(lease_key,holder_id,expires_at,updated_at)
+      VALUES($1,$2,NOW()+($3 * INTERVAL '1 millisecond'),NOW())
+      ON CONFLICT(lease_key) DO UPDATE SET holder_id=EXCLUDED.holder_id,expires_at=EXCLUDED.expires_at,updated_at=NOW()`, [key, holder, ttlMs])
+    forced = true
+    logger.warn({ leaseKey: key, holder }, 'Owner requested Lily instance takeover')
+    return true
+  }
+
+  return { acquire, release, forceTakeover, status: () => ({ owned, role: owned ? 'active' : 'standby' }) }
 }
 
 module.exports = { createInstanceLease }
