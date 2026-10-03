@@ -4,8 +4,8 @@ const fs = require('fs')
 const path = require('path')
 const { Pool } = require('pg')
 
-const sessionId = process.env.WA_SESSION_ID || 'rimuru-wa-test'
-const localDir = path.join(__dirname, '..', 'session')
+const defaultSessionId = process.env.WA_SESSION_ID || 'rimuru-wa-test'
+const localRoot = path.join(__dirname, '..', 'sessions')
 let pool = null
 let schemaReady = false
 
@@ -38,7 +38,14 @@ async function ensureSchema () {
   schemaReady = true
 }
 
-async function postgresAuthState (baileys) {
+function validSessionId (value) {
+  const id = String(value || defaultSessionId).trim()
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(id)) throw new Error('Invalid WhatsApp session id')
+  return id
+}
+
+async function postgresAuthState (baileys, requestedSessionId) {
+  const sessionId = validSessionId(requestedSessionId)
   await ensureSchema()
   const db = database()
   const { BufferJSON, initAuthCreds, proto } = baileys
@@ -99,13 +106,17 @@ async function postgresAuthState (baileys) {
   }
 }
 
-async function createAuthState (baileys) {
-  if (database()) return postgresAuthState(baileys)
+async function createAuthState (baileys, requestedSessionId = defaultSessionId) {
+  const sessionId = validSessionId(requestedSessionId)
+  if (database()) return postgresAuthState(baileys, sessionId)
+  const localDir = path.join(localRoot, sessionId)
   fs.mkdirSync(localDir, { recursive: true })
   const state = await baileys.useMultiFileAuthState(localDir)
   return { ...state, storage: 'local' }
 }
-async function clearAuthState () {
+async function clearAuthState (requestedSessionId = defaultSessionId) {
+  const sessionId = validSessionId(requestedSessionId)
+  const localDir = path.join(localRoot, sessionId)
   fs.rmSync(localDir, { recursive: true, force: true }); fs.mkdirSync(localDir, { recursive: true })
   const db = database()
   if (db) { await ensureSchema(); await db.query('DELETE FROM rimuru_wa_auth WHERE session_id=$1', [sessionId]) }
@@ -117,4 +128,14 @@ async function pingDatabase () {
   const startedAt = Date.now(); await db.query('SELECT 1 AS ok'); return Date.now() - startedAt
 }
 
-module.exports = { createAuthState, clearAuthState, closeAuthStore, pingDatabase, database }
+async function listAuthSessions () {
+  const db = database()
+  if (db) {
+    await ensureSchema()
+    const result = await db.query("SELECT DISTINCT session_id FROM rimuru_wa_auth WHERE item_key='creds' ORDER BY session_id")
+    return result.rows.map(row => row.session_id)
+  }
+  try { return fs.readdirSync(localRoot, { withFileTypes: true }).filter(x => x.isDirectory()).map(x => x.name).filter(x => /^[a-zA-Z0-9_-]{1,64}$/.test(x)) } catch { return [] }
+}
+
+module.exports = { createAuthState, clearAuthState, listAuthSessions, closeAuthStore, pingDatabase, database, validSessionId }
