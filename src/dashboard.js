@@ -1,0 +1,45 @@
+'use strict'
+const crypto=require('crypto'),fs=require('fs/promises'),path=require('path')
+const ai=require('./ai-v2')
+
+const PUBLIC=path.join(__dirname,'..','public')
+const MIME={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'application/javascript; charset=utf-8'}
+function json(res,status,data,headers={}){res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store',...headers});res.end(JSON.stringify(data))}
+function safeEqual(a,b){const x=Buffer.from(String(a||'')),y=Buffer.from(String(b||''));return x.length===y.length&&crypto.timingSafeEqual(x,y)}
+function cookies(req){return Object.fromEntries(String(req.headers.cookie||'').split(';').map(x=>x.trim().split(/=(.*)/s)).filter(x=>x[0]).map(([k,v])=>[k,decodeURIComponent(v||'')]))}
+async function body(req,max=16384){const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>max)throw Object.assign(Error('Request too large'),{status:413});chunks.push(chunk)}if(!chunks.length)return{};try{return JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{throw Object.assign(Error('Invalid JSON'),{status:400})}}
+function maskPhone(value){const x=String(value||'').split(':')[0].split('@')[0].replace(/\D/g,'');return x.length>7?`+${x.slice(0,3)} ••• ••${x.slice(-4)}`:x?'Connected account':'Not available'}
+function cleanIncident(event={}){return{type:event.type||'unknown',at:event.recoveredAt||event.startedAt||new Date().toISOString(),status:event.status||event.code||null,message:String(event.message||'').slice(0,500),model:event.model||null,retryAt:event.retryAt||null,durationSeconds:event.durationSeconds||null,attempts:(event.attempts||[]).slice(0,8).map(x=>({model:x.model,status:x.status||x.code||null,message:String(x.message||'').slice(0,220)}))}}
+
+function createDashboard({connection,database,logger}){
+ const sessions=new Map(),failures=new Map(),password=String(process.env.DASHBOARD_PASSWORD||process.env.OWNER_DASHBOARD_PASSWORD||''),hours=Math.max(1,Math.min(168,Number(process.env.DASHBOARD_SESSION_HOURS)||24))
+ function prune(){const now=Date.now();for(const[token,s]of sessions)if(s.expiresAt<=now)sessions.delete(token);for(const[ip,s]of failures)if(now-s.startedAt>10*60*1000)failures.delete(ip)}
+ function session(req){prune();const token=cookies(req).lily_session,s=sessions.get(token);return s&&s.expiresAt>Date.now()?s:null}
+ function requireAuth(req,res,csrf=false){const s=session(req);if(!s){json(res,401,{ok:false,error:'Sign in required'});return null}if(csrf&&!safeEqual(req.headers['x-lily-csrf'],s.csrf)){json(res,403,{ok:false,error:'Security token mismatch. Refresh the dashboard.'});return null}return s}
+ async function asset(res,name){const file=path.join(PUBLIC,name);try{const data=await fs.readFile(file);res.writeHead(200,{'content-type':MIME[path.extname(name)]||'application/octet-stream','cache-control':name.endsWith('.html')?'no-store':'public, max-age=3600','x-content-type-options':'nosniff'});res.end(data)}catch{res.writeHead(404).end('Not found')}}
+ async function stats(){const d=database();if(!d)return{database:false,memories:0,memoryUsers:0,conversations:0,registeredUsers:0};try{const q=await d.query(`SELECT
+   (SELECT COUNT(*)::int FROM rimuru_ai_memories) memories,
+   (SELECT COUNT(DISTINCT user_id)::int FROM rimuru_ai_memories) memory_users,
+   (SELECT COUNT(*)::int FROM rimuru_ai_conversation) conversations,
+   (SELECT COUNT(*)::int FROM rimuru_wa_users) registered_users`);const x=q.rows[0]||{};return{database:true,memories:x.memories||0,memoryUsers:x.memory_users||0,conversations:x.conversations||0,registeredUsers:x.registered_users||0}}catch(e){logger.warn({err:e},'Dashboard stats failed');return{database:false,memories:0,memoryUsers:0,conversations:0,registeredUsers:0}}
+ }
+ async function memories(url){const d=database();if(!d)return[];const q=String(url.searchParams.get('q')||'').trim().slice(0,80),limit=Math.max(1,Math.min(100,Number(url.searchParams.get('limit'))||40)),params=[],where=[];if(q){params.push(`%${q}%`);where.push(`(user_id ILIKE $${params.length} OR memory_text ILIKE $${params.length} OR scope ILIKE $${params.length})`)}params.push(limit);const result=await d.query(`SELECT id,user_id,scope,memory_text,importance,created_at,updated_at,last_used_at FROM rimuru_ai_memories ${where.length?`WHERE ${where.join(' AND ')}`:''} ORDER BY updated_at DESC LIMIT $${params.length}`,params);return result.rows}
+ async function handle(req,res){const url=new URL(req.url,'http://localhost');if(!url.pathname.startsWith('/dashboard'))return false;try{
+   if(req.method==='GET'&&(url.pathname==='/dashboard'||url.pathname==='/dashboard/')){await asset(res,'dashboard.html');return true}
+   if(req.method==='GET'&&url.pathname==='/dashboard/app.css'){await asset(res,'dashboard.css');return true}
+   if(req.method==='GET'&&url.pathname==='/dashboard/app.js'){await asset(res,'dashboard.js');return true}
+   if(req.method==='GET'&&url.pathname==='/dashboard/api/session'){const s=session(req);json(res,200,{ok:true,authenticated:!!s,configured:!!password,csrf:s?.csrf||null});return true}
+   if(req.method==='POST'&&url.pathname==='/dashboard/api/login'){if(!password){json(res,503,{ok:false,error:'Set DASHBOARD_PASSWORD in Render first.'});return true}const ip=String(req.headers['x-forwarded-for']||req.socket.remoteAddress||'unknown').split(',')[0].trim(),f=failures.get(ip)||{count:0,startedAt:Date.now()};if(f.count>=5&&Date.now()-f.startedAt<10*60*1000){json(res,429,{ok:false,error:'Too many attempts. Try again later.'});return true}const input=await body(req);if(!safeEqual(input.password,password)){f.count++;failures.set(ip,f);json(res,401,{ok:false,error:'Wrong password'});return true}failures.delete(ip);const token=crypto.randomBytes(32).toString('base64url'),csrf=crypto.randomBytes(24).toString('base64url');sessions.set(token,{csrf,expiresAt:Date.now()+hours*3600000});json(res,200,{ok:true,csrf},{'set-cookie':`lily_session=${token}; Path=/dashboard; HttpOnly; Secure; SameSite=Strict; Max-Age=${hours*3600}`});return true}
+   if(req.method==='POST'&&url.pathname==='/dashboard/api/logout'){const s=requireAuth(req,res,true);if(!s)return true;const token=cookies(req).lily_session;sessions.delete(token);json(res,200,{ok:true},{'set-cookie':'lily_session=; Path=/dashboard; HttpOnly; Secure; SameSite=Strict; Max-Age=0'});return true}
+   if(req.method==='GET'&&url.pathname==='/dashboard/api/overview'){const s=requireAuth(req,res);if(!s)return true;const wa=connection.status(),dbStats=await stats();json(res,200,{ok:true,csrf:s.csrf,whatsapp:{...wa,phone:maskPhone(wa.phone)},ai:ai.health(),stats:dbStats,incidents:connection.incidentHistory().slice(0,8)});return true}
+   if(req.method==='GET'&&url.pathname==='/dashboard/api/memories'){if(!requireAuth(req,res))return true;json(res,200,{ok:true,memories:await memories(url)});return true}
+   if(req.method==='POST'&&url.pathname==='/dashboard/api/memories/delete'){if(!requireAuth(req,res,true))return true;const input=await body(req),id=String(input.id||'');if(!/^\d+$/.test(id)){json(res,400,{ok:false,error:'Invalid memory id'});return true}const d=database();if(!d){json(res,503,{ok:false,error:'Database unavailable'});return true}const result=await d.query('DELETE FROM rimuru_ai_memories WHERE id=$1',[id]);json(res,200,{ok:true,deleted:result.rowCount});return true}
+   if(req.method==='POST'&&url.pathname==='/dashboard/api/actions/reconnect'){if(!requireAuth(req,res,true))return true;await connection.reconnect();json(res,200,{ok:true,message:'WhatsApp reconnect started'});return true}
+   if(req.method==='POST'&&url.pathname==='/dashboard/api/actions/pause'){if(!requireAuth(req,res,true))return true;const input=await body(req);connection.setPaused(!!input.paused);json(res,200,{ok:true,paused:connection.status().paused});return true}
+   if(req.method==='POST'&&url.pathname==='/dashboard/api/actions/pair'){if(!requireAuth(req,res,true))return true;const input=await body(req);if(input.confirm!=='REPLACE'){json(res,400,{ok:false,error:'Type REPLACE to confirm session replacement.'});return true}const code=await connection.requestPairingCode(input.phone);json(res,200,{ok:true,code:String(code).match(/.{1,4}/g)?.join('-')||code});return true}
+   json(res,404,{ok:false,error:'Dashboard route not found'});return true
+  }catch(e){logger.error({err:e,path:url.pathname},'Dashboard request failed');json(res,e.status||500,{ok:false,error:e.status?e.message:'Dashboard request failed'});return true}
+ }
+ return{handle,_test:{safeEqual,maskPhone,cleanIncident}}
+}
+module.exports={createDashboard,_test:{safeEqual,maskPhone,cleanIncident}}
