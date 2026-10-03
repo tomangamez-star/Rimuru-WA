@@ -14,6 +14,11 @@ test('dashboard masks connected WhatsApp numbers',()=>{
  assert.equal(masked.includes('911079'),false)
 })
 
+test('pairing code is isolated and consistently grouped',()=>{
+ assert.equal(_test.formatPairingCode('7lim-fLGXR-7EAB'),'7lim-fLGX-R7EA-B')
+ assert.equal(_test.formatPairingCode('1234 5678'),'1234-5678')
+})
+
 test('dashboard incident sanitizer limits provider details',()=>{
  const out=_test.cleanIncident({type:'failure',message:'x'.repeat(900),attempts:Array.from({length:12},(_,i)=>({model:`m${i}`,message:'y'.repeat(400)}))})
  assert.equal(out.message.length,500)
