@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#09080f"><title>Lily Control Room</title><link rel="stylesheet" href="/dashboard/app.css"></head>
+<body>
+ <div class="noise"></div>
+ <section id="login" class="login-shell hidden">
+  <div class="login-card"><div class="sigil">L</div><p class="eyebrow">JTF × RYUDEN</p><h1>Lily Control Room</h1><p class="muted">Owner access only. Lily is watching the door.</p><form id="loginForm"><label>Control password<input id="password" type="password" autocomplete="current-password" required placeholder="Enter password"></label><button class="primary" type="submit">Enter the core</button><p id="loginError" class="error"></p></form></div>
+ </section>
+ <div id="app" class="app hidden">
+  <header><div><p class="eyebrow">JTF × RYUDEN</p><h1>Lily <span>Control Room</span></h1></div><div id="livePill" class="pill"><i></i><span>Loading</span></div></header>
+  <main>
+   <section id="overviewPage" class="page active">
+    <div class="hero"><div><p class="eyebrow">SYSTEM PRESENCE</p><h2 id="heroTitle">Waking Lily…</h2><p id="heroSub" class="muted">Reading the current WhatsApp and AI state.</p></div><div class="orb"><span>莉</span></div></div>
+    <div class="stats"><article><small>UPTIME</small><strong id="uptime">—</strong></article><article><small>USERS</small><strong id="users">—</strong></article><article><small>MEMORIES</small><strong id="memoryCount">—</strong></article><article><small>AI STATE</small><strong id="aiState">—</strong></article></div>
+    <article class="panel"><div class="panel-head"><div><p class="eyebrow">PRIMARY ACCOUNT</p><h3 id="accountPhone">Not detected</h3></div><span id="waBadge" class="badge">Unknown</span></div><div class="detail-grid"><div><small>Storage</small><b id="storage">—</b></div><div><small>Last message</small><b id="lastMessage">—</b></div><div><small>Handled</small><b id="handled">0</b></div><div><small>Registration</small><b id="registered">—</b></div></div><div class="actions"><button data-action="reconnect">Reconnect</button><button id="pauseBtn" data-action="pause">Pause Lily</button></div></article>
+    <article class="panel"><div class="panel-head"><div><p class="eyebrow">RECENT INCIDENTS</p><h3>What Lily survived</h3></div></div><div id="incidentList" class="list empty">No incidents recorded this boot.</div></article>
+   </section>
+   <section id="accountsPage" class="page"><div class="title"><p class="eyebrow">WHATSAPP</p><h2>Account control</h2><p class="muted">V1 controls the current primary account. Multi-number slots arrive with the session-manager upgrade.</p></div><article class="panel danger-zone"><h3>Replace paired number</h3><p class="muted">This clears the current WhatsApp authentication and generates a pairing code for another number. Memories and game data remain in Supabase.</p><label>New WhatsApp number<input id="pairPhone" inputmode="tel" placeholder="2348012345678"></label><label>Confirmation<input id="pairConfirm" placeholder="Type REPLACE"></label><button id="pairBtn" class="danger">Generate replacement code</button><div id="pairResult" class="pair-code hidden"></div></article></section>
+   <section id="aiPage" class="page"><div class="title"><p class="eyebrow">INTELLIGENCE</p><h2>Provider health</h2><p class="muted">Private model state. Lily never exposes this language in public chats.</p></div><div id="modelList" class="model-list"></div></section>
+   <section id="memoryPage" class="page"><div class="title"><p class="eyebrow">MEMORY VAULT</p><h2>What Lily remembers</h2><p class="muted">Shared long-term memories. Conversation separation for multiple Lily numbers belongs to the next session-manager patch.</p></div><div class="search"><input id="memorySearch" placeholder="Search user, scope or memory"><button id="searchBtn">Search</button></div><div id="memoryList" class="memory-list"></div></section>
+  </main>
+  <nav><button class="active" data-page="overviewPage"><span>◈</span>Core</button><button data-page="accountsPage"><span>◉</span>Accounts</button><button data-page="aiPage"><span>✦</span>AI</button><button data-page="memoryPage"><span>◇</span>Memory</button><button id="logoutBtn"><span>↗</span>Exit</button></nav>
+ </div>
+ <div id="toast" class="toast"></div><script src="/dashboard/app.js"></script>
+</body></html>
