@@ -1,0 +1,5 @@
+Delete this obsolete controller file from the repository:
+
+src/telegram-control.js
+
+The bot no longer imports or uses it. Telegram archive compatibility fields used by the card collection are unrelated and remain supported.

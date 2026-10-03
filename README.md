@@ -1,16 +1,14 @@
-# Rimuru WhatsApp Speed Test — Telegram Controlled
+# Rimuru WhatsApp Bot — Website Controlled
 
-This is a deliberately tiny WhatsApp latency test. It has no dashboard, media,
-AI, moderation, card rendering, or Rimuru game logic.
+Lily is controlled from the private owner dashboard at `/dashboard`.
 
 ## Commands
 
-Private Telegram control bot (owner only):
+Owner website:
 
-- `/pair 2348076776671` — clears an invalid session and returns a phone code.
-- `/status` — connection, saved-session and storage status.
-- `/reconnect` — reconnects without deleting the saved session.
-- `/ping` — verifies that the Telegram controller is alive.
+- Pair or replace the WhatsApp account with a phone-number code.
+- View connection, storage, provider and memory status.
+- Reconnect, pause/resume, inspect incidents, and take control from a stale deployment.
 
 WhatsApp:
 
@@ -21,13 +19,9 @@ WhatsApp:
 
 ## Required environment variables
 
-- `TELEGRAM_BOT_TOKEN` — from Telegram BotFather.
-- `TELEGRAM_OWNER_ID` — your numeric Telegram user ID, not username.
+- `DASHBOARD_PASSWORD` — strong private password for `/dashboard`.
 - `DATABASE_URL` — Supabase Postgres connection string; use the pooler URL.
 - `WA_SESSION_ID` — optional; defaults to `rimuru-wa-test`.
-
-The Telegram controller silently ignores everyone except the configured owner,
-and it accepts commands only in the owner's private chat.
 
 ## Deploy
 
@@ -48,16 +42,10 @@ Start command:
 npm start
 ```
 
-After deployment, message your Telegram controller:
-
-```text
-/status
-/pair 2348076776671
-```
-
-Enter the returned code immediately in WhatsApp's **Linked devices → Link with
-phone number** screen. Once `/status` says `connected`, send `/ping` to the
-WhatsApp account from another account.
+After deployment, open `https://YOUR-SERVICE.onrender.com/dashboard`, sign in,
+and use **Take control** if the instance is in standby. Use the Accounts page
+to generate a pairing code, then enter it in WhatsApp's **Linked devices → Link
+with phone number** screen.
 
 ## Reading the result
 

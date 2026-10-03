@@ -9,10 +9,6 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 22.18.0
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_OWNER_ID
-        sync: false
       - key: DASHBOARD_PASSWORD
         sync: false
       - key: DATABASE_URL
